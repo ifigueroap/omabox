@@ -30,6 +30,21 @@ printf 'chrome-%s_%s-Default\n' "${host,,}" "${path:-/}" | sed 's|/|_|g'
 """
 
 
+class IpcTests(unittest.TestCase):
+    def test_panel_registers_quickshell_ipc_handler(self) -> None:
+        source = (ROOT / "Panel.qml").read_text(encoding="utf-8")
+        # ShellIpc is a qs.Commons component type. A third-party document
+        # outside the shell tree cannot name it ("ShellIpc is not a type"),
+        # and the panel then never mounts. IpcHandler plus the IpcRegistry
+        # singleton is the body of shell/Commons/ShellIpc.qml.
+        self.assertNotIn("ShellIpc {", source)
+        self.assertIn("IpcHandler {", source)
+        self.assertIn('target: "omabox"', source)
+        self.assertIn("Commons.IpcRegistry.register(ipc)", source)
+        self.assertIn("function dashboard(): string", source)
+        self.assertIn("function reload(): string", source)
+
+
 class ClassTests(unittest.TestCase):
     def test_golden_classes(self) -> None:
         for line in CLASSES.read_text(encoding="utf-8").splitlines():
