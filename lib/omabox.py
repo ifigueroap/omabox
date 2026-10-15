@@ -122,6 +122,40 @@ def class_regex(class_name: str) -> str:
     return "^" + re.escape(class_name) + "$"
 
 
+def chromium_pids(user_data: str, proc_root: Path | None = None) -> list[str]:
+    """PIDs whose cmdline contains this Chromium --user-data-dir.
+
+    Omabox profiles share one user-data-dir, so these are every Omabox
+    browser process, not a single profile. proc_root defaults to /proc and
+    can be pointed at a fixture with OMABOX_PROC_ROOT.
+    """
+    needle = (user_data or "").encode()
+    if not needle:
+        return []
+    root = proc_root
+    if root is None:
+        override = os.environ.get("OMABOX_PROC_ROOT")
+        root = Path(override) if override else Path("/proc")
+    if not root.is_dir():
+        return []
+    found: list[str] = []
+    for entry in root.iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            raw = (entry / "cmdline").read_bytes()
+        except OSError:
+            continue
+        argv = [part for part in raw.split(b"\0") if part]
+        # Match the executable, not the --user-data-dir path (that path
+        # itself contains "chromium").
+        exe = argv[0].rsplit(b"/", 1)[-1].lower() if argv else b""
+        if needle not in raw or b"chrom" not in exe:
+            continue
+        found.append(entry.name)
+    return sorted(found, key=int)
+
+
 def normalize_url(url: str, allow_empty: bool = False) -> str:
     text = (url or "").strip()
     if not text:
@@ -465,7 +499,14 @@ def render_lua(services: list[dict] | None = None) -> str:
         "  return",
         "end",
         "",
-        'o.bind("SUPER + O", "Omabox", "omabox toggle")',
+        "-- Super+O is Omarchy's \"Pop window out\" (default/hypr/bindings/tiling.lua).",
+        "-- Super+Shift+O launches Obsidian while preinstalled binds are enabled.",
+        "-- Super+Alt+O is unbound in those defaults, so the toggle uses o.bind.",
+        "-- `omabox setup`, `omabox add`, and `omabox remove` rewrite this file.",
+        "-- To change the chord, edit the next line. If that chord is already",
+        "-- bound, use o.rebind with the same arguments (it removes the old bind).",
+        "-- Then: hyprctl reload && hyprctl configerrors",
+        'o.bind("SUPER + ALT + O", "Omabox", "omabox toggle")',
         "for service = 1, 9 do",
         "  o.bind(",
         '    "SUPER + ALT + code:" .. tostring(service + 9),',
@@ -480,6 +521,8 @@ def render_lua(services: list[dict] | None = None) -> str:
         if not cls:
             continue
         pattern = class_regex(cls).replace("\\", "\\\\").replace('"', '\\"')
+        # Wiki window-rule effect `workspace` may be suffixed with " silent".
+        # o.window() forwards that table to hl.window_rule (default/hypr/helpers.lua).
         lines.append(f'o.window("{pattern}", {{ workspace = "special:omabox silent" }})')
     lines.append("")
     return "\n".join(lines)
@@ -634,6 +677,11 @@ def cmd_uninstall(purge: bool) -> None:
         print(f"Kept {config_file()} and {data_dir()}. Pass --purge to delete them.")
 
 
+def cmd_chromium_pids(user_data: str) -> None:
+    for pid in chromium_pids(user_data):
+        print(pid)
+
+
 def cmd_launch_spec(ident: str) -> None:
     services = load_services()
     if re.fullmatch(r"[1-9]", ident):
@@ -729,6 +777,9 @@ def build_parser() -> argparse.ArgumentParser:
     spec = sub.add_parser("launch-spec")
     spec.add_argument("id")
 
+    pids = sub.add_parser("chromium-pids")
+    pids.add_argument("user_data")
+
     sub.add_parser("fetch-icons")
     return parser
 
@@ -755,6 +806,8 @@ def main(argv: list[str] | None = None) -> None:
         cmd_uninstall(purge=args.purge)
     elif args.command == "launch-spec":
         cmd_launch_spec(args.id)
+    elif args.command == "chromium-pids":
+        cmd_chromium_pids(args.user_data)
     elif args.command == "fetch-icons":
         cmd_fetch_icons()
     else:

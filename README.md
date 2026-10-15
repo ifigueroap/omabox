@@ -32,30 +32,61 @@ Skip the menu row with `omabox setup` and no `--menu`. Enable the plugin later w
 
 The dock is a layer-shell panel on the right edge of the screen, a vertical pill of service icons plus a `+` button. It appears when the plugin is enabled and the shell has loaded `Panel.qml`. Theme colors come from `qs.Commons` `Color` and `Style`, which the shell updates when the theme changes (`docs/omarchy-shell.md`, `docs/theming.md`).
 
-After a later `git pull` in the plugin checkout, restart the shell so it loads the new QML. Saving a file under `~/.config/omarchy/plugins/` also reloads plugin code; a type error on the previous load still needs a restart:
+After a later `git pull` in the plugin checkout, restart the shell so it loads new QML. Saving a file under `~/.config/omarchy/plugins/` also reloads plugin code; a type error on the previous load still needs a restart. Hyprland binds live in the generated file `~/.config/hypr/omabox.lua`, which a pull does not rewrite. Run `omabox setup` again after a pull that changes keybinds or window rules, then check the config:
 
 ```bash
 git -C ~/.config/omarchy/plugins/omabox pull
+omabox setup
+hyprctl configerrors
 omarchy restart shell
 omarchy-shell omabox dashboard
 ```
 
-`omabox dashboard` prints `ok` and opens the service dashboard when the panel is mounted. `Target not found.` means `Panel.qml` did not load, so no `omabox` IPC target was registered. `omarchy-restart-shell` is the same restart.
+`omabox dashboard` prints `ok` and opens the service dashboard when the panel is mounted. `Target not found.` means `Panel.qml` did not load, so no `omabox` IPC target was registered. `omarchy-restart-shell` is the same restart. A CLI-only change (launch, focus, toggle) is picked up through the `~/.local/bin/omabox` symlink without a shell restart.
 
 ## Keys
 
 | Keys | Action |
 | --- | --- |
-| `Super+O` | Toggle the `omabox` special workspace |
+| `Super+Alt+O` | Toggle the `omabox` special workspace |
 | `Super+Alt+1` … `9` | Focus the service whose `key` is that digit, or launch it |
 
-Those binds live in the generated Lua, using the same `o.bind` helper as `~/.config/hypr/bindings.lua` and `default/hypr/bindings/tiling.lua` (`code:10` is the key `1`). Digit keys follow the `key` field, not the order in the file. If two services share a key, the earlier one wins and `omabox add` says so.
+`Super+O` is Omarchy's "Pop window out" bind (`default/hypr/bindings/tiling.lua`). `Super+Shift+O` launches Obsidian while preinstalled binds are enabled (`default/hypr/bindings/applications.lua`). `Super+Alt+O` is unbound in those defaults, so the generated file uses `o.bind` rather than replacing either chord. List what is bound on this machine with `omarchy menu keybindings --print`.
 
-Click a dock icon to focus or launch. The window rule parks the app on special workspace `omabox` without showing it, so the click waits until Hyprland reports that window and only then opens the workspace. An empty special workspace does not stay open, which is why toggling it before Chromium maps looks like a click that did nothing. The `+` button opens the dashboard (also `omabox dashboard`, or the menu row "Omabox services").
+Those binds live in `~/.config/hypr/omabox.lua`, using the same `o.bind` helper as `~/.config/hypr/bindings.lua` (`code:10` is the key `1`). Digit keys follow the `key` field, not the order in the file. If two services share a key, the earlier one wins and `omabox add` says so.
+
+To use a different toggle chord, edit the `o.bind("SUPER + ALT + O", ...)` line in `~/.config/hypr/omabox.lua`. If that chord is already bound, change `o.bind` to `o.rebind` (same arguments). `o.rebind` removes the previous action first, which is how Omarchy's own manual replaces the Obsidian bind:
+
+```lua
+o.rebind("SUPER + SHIFT + O", "Omabox", "omabox toggle")
+```
+
+Then validate:
+
+```bash
+hyprctl reload
+hyprctl configerrors
+```
+
+`omabox setup`, `omabox add`, and `omabox remove` rewrite `omabox.lua`, so put the custom chord back after those commands.
+
+Click a dock icon to focus or launch. The window rule parks the app on special workspace `omabox` without showing it (`workspace` may end with ` silent` in the [Hyprland window rules](https://wiki.hypr.land/Configuring/Basics/Window-Rules/)). The click waits until Hyprland reports that window, moves it onto `special:omabox`, toggles the special workspace, and focuses it. An empty special workspace does not stay open, which is why toggling it before Chromium maps looks like a click that did nothing. The `+` button opens the dashboard (also `omabox dashboard`, or the menu row "Omabox services").
+
+Quattro's `hyprctl dispatch` runs Lua, the same shape as Omarchy's scratchpad binds. Keyword dispatchers (`togglespecialworkspace`, `focuswindow`, `movetoworkspacesilent`) fail with `')' expected near 'omabox'`. Omabox calls:
+
+```bash
+hyprctl dispatch 'hl.dsp.workspace.toggle_special("omabox")'
+hyprctl dispatch 'hl.dsp.window.move({ workspace = "special:omabox", follow = false, window = "class:chrome-web.whatsapp.com__-WhatsApp" })'
+hyprctl dispatch 'hl.dsp.focus({ window = "class:chrome-web.whatsapp.com__-WhatsApp" })'
+```
+
+If the window is already mapped, `omabox focus` and `omabox launch` show it and do not start a second Chromium. Chromium would otherwise print that it is opening in the existing session and leave the hidden window where it is. If that process is running but Hyprland has no matching window, Omabox restarts the shared browser (every Omabox profile lives in one `--user-data-dir`) and launches the service again.
 
 ```bash
 omabox launch whatsapp --print   # browser and flags, no window
-omabox launch whatsapp           # start it and show the omabox workspace
+omabox toggle --print            # Lua hyprctl dispatch
+omabox focus whatsapp --print    # move, toggle, and focus commands
+omabox launch whatsapp           # start it, or show it, on the omabox workspace
 ```
 
 ## Config
@@ -116,7 +147,7 @@ with `/` and spaces replaced by `_`. For a path of `/` that is `chrome-<host>__-
 
 That is `web_app::GenerateApplicationNameFromURL` (`host + "_" + path`) plus `GetShortcutFileName` (`chrome-` + that name + `-` + profile basename) in Chromium. Omarchy already special-cases profile `Default` in `bin/omarchy-webapp-window-class`. `omabox class` matches that script for `Default` and uses the profile name otherwise. A space in `--profile-directory=Profile 1` stays a space in the flag and becomes `Profile_1` in the class.
 
-Window rules use `o.window` with `workspace = "special:omabox silent"`, so a new service does not steal the current workspace. `omabox focus` moves the window onto that workspace, shows it, and focuses it.
+Window rules use `o.window` with `workspace = "special:omabox silent"`. That helper sets `match.class` and passes the table to `hl.window_rule` (`default/hypr/helpers.lua`). The Hyprland wiki's `workspace` effect accepts a trailing ` silent`, the same form as Omarchy's screensaver rule in `default/hypr/apps/system.lua`, so a new service does not steal the current workspace. `omabox focus` moves the window onto that workspace with `hl.dsp.window.move`, shows it with `hl.dsp.workspace.toggle_special("omabox")`, and focuses it with `hl.dsp.focus`.
 
 Unread badges read Hyprland `windowtitlev2` titles (`(3) …`). An `urgent` event with no parsed count draws a dot instead, cleared on `activewindowv2`.
 
@@ -165,5 +196,5 @@ Not run, because there is no Omarchy desktop here:
 - Quickshell loading the panel, live theme updates, layer-shell anchors, or `ShellIpc`
 - A real Chromium `--app` window and its Hyprland `class`
 - `windowtitlev2` / `urgent` delivery into the badge
-- `uwsm-app`, `hyprctl dispatch`, or `hyprctl reload` against a compositor
+- `hyprctl dispatch` or `hyprctl reload` against a running compositor (tests check the Lua strings with a fake `hyprctl`)
 - `omarchy plugin add` itself (the manifest is checked against the same rules as `omarchy-plugin-validate`)
