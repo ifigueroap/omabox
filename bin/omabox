@@ -88,23 +88,56 @@ run_launch() {
   fi
 }
 
-# Window rules use "special:omabox silent", so Chromium maps onto a hidden
-# workspace. Toggling that workspace before the window exists does not stick
-# (an empty special workspace closes), and the app then stays invisible.
-# Wait until Hyprland reports the class, then show and focus it.
+# Quattro hyprctl evaluates `dispatch` arguments as Lua. A keyword such as
+# `togglespecialworkspace omabox` is parsed like dispatch(togglespecialworkspace omabox)
+# and fails with `')' expected near 'omabox'`. The expressions below match
+# https://wiki.hypr.land/Configuring/Basics/Dispatchers/ and Omarchy's scratchpad
+# binds in default/hypr/bindings/tiling.lua.
+lua_escape() {
+  local text=$1
+  text=${text//\\/\\\\}
+  text=${text//\"/\\\"}
+  printf '%s' "$text"
+}
+
+dispatch_expr_toggle() {
+  printf '%s' 'hl.dsp.workspace.toggle_special("omabox")'
+}
+
+dispatch_expr_move() {
+  local class=$1
+  printf 'hl.dsp.window.move({ workspace = "special:omabox", follow = false, window = "class:%s" })' "$(lua_escape "$class")"
+}
+
+dispatch_expr_focus() {
+  local class=$1
+  printf 'hl.dsp.focus({ window = "class:%s" })' "$(lua_escape "$class")"
+}
+
+run_dispatch() {
+  hyprctl dispatch "$1"
+}
+
+print_dispatch() {
+  printf "hyprctl dispatch '%s'\n" "$1"
+}
+
+# Window rules use workspace = "special:omabox silent" (Hyprland allows a
+# trailing " silent" on a workspace rule). The window maps onto a hidden
+# special workspace. Toggle that workspace only after the window exists;
+# an empty special workspace does not stay open.
 wait_and_show() {
-  local class_name=$1 regex=$2
-  local i
-  for (( i = 0; i < 80; i++ )); do
-    if window_open "$class_name"; then
-      show_special || true
-      hyprctl dispatch focuswindow "class:$regex" >/dev/null || true
-      return 0
+  local class_name=$1
+  local ticks=${OMABOX_WINDOW_WAIT_TICKS:-80}
+  local i status
+  for (( i = 0; i < ticks; i++ )); do
+    show_only "$class_name" && return 0
+    status=$?
+    if [[ $status -eq 2 ]]; then
+      return 1
     fi
     sleep 0.25
   done
-  echo "omabox: no window appeared for class ${class_name}" >&2
-  echo "omabox: try: omabox launch --print  and  omabox launch" >&2
   return 1
 }
 
@@ -124,96 +157,118 @@ sys.exit(1)
 '
 }
 
-window_open() {
-  local class_name=$1
-  have hyprctl || return 1
-  hyprctl -j clients 2>/dev/null | python3 -c '
-import json, sys
-wanted = sys.argv[1]
-try:
-    clients = json.load(sys.stdin)
-except Exception:
-    sys.exit(1)
-for client in clients:
-    if client.get("class") == wanted or client.get("initialClass") == wanted:
-        sys.exit(0)
-sys.exit(1)
-' "$class_name"
-}
-
 show_special() {
   if special_shown; then
     return 0
   fi
-  hyprctl dispatch togglespecialworkspace omabox >/dev/null
+  run_dispatch "$(dispatch_expr_toggle)"
 }
 
-cmd_launch() {
-  local ident=${1:?service id or key}
-  local print=0
-  if [[ ${2:-} == --print ]]; then
-    print=1
+# Show only this service. Other Omabox windows move to special:omabox-hidden.
+# Extra windows of this class are closed. Returns 0 when a window was shown,
+# 1 when none exists, 2 when Hyprland's client list could not be read.
+show_only() {
+  local class_name=$1
+  local plan status expr warning focus_expr
+  set +e
+  plan=$(hyprctl -j clients 2>/dev/null | python focus-plan "$class_name")
+  status=$?
+  set -e
+  if [[ $status -eq 2 ]]; then
+    echo "omabox: could not read Hyprland clients; not launching another window" >&2
+    return 2
   fi
-  local spec browser
+  if [[ $status -ne 0 ]]; then
+    return 1
+  fi
+  while IFS= read -r warning; do
+    [[ -n $warning ]] || continue
+    echo "omabox: ${warning}" >&2
+  done < <(python3 -c 'import json,sys; print("\n".join(json.loads(sys.argv[1])["warnings"]))' "$plan")
+  while IFS= read -r expr; do
+    [[ -n $expr ]] || continue
+    run_dispatch "$expr"
+  done < <(python3 -c 'import json,sys; print("\n".join(json.loads(sys.argv[1])["dispatch"]))' "$plan")
+  show_special
+  focus_expr=$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["focus"])' "$plan")
+  run_dispatch "$focus_expr"
+  return 0
+}
+
+open_service() {
+  local ident=$1
+  local spec browser class_name status
   spec=$(python launch-spec "$ident")
-  if (( print )); then
-    browser=$(resolve_browser 0)
-  else
-    browser=$(resolve_browser 1)
-  fi
+  class_name=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["class"])' <<<"$spec")
   local -a args=()
   local arg
   while IFS= read -r arg; do
     args+=("$arg")
   done < <(python3 -c 'import json,sys; print("\n".join(json.load(sys.stdin)["args"]))' <<<"$spec")
-  local class_name regex
-  class_name=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["class"])' <<<"$spec")
-  regex=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["classRegex"])' <<<"$spec")
-  if (( print )); then
+  if have hyprctl; then
+    show_only "$class_name" && return 0
+    status=$?
+    if [[ $status -eq 2 ]]; then
+      return 1
+    fi
+  fi
+  browser=$(resolve_browser 1)
+  echo "omabox: launching ${ident}" >&2
+  run_launch "$browser" "${args[@]}"
+  if ! have hyprctl; then
+    return 0
+  fi
+  if wait_and_show "$class_name"; then
+    return 0
+  fi
+  echo "omabox: no window appeared for class ${class_name}" >&2
+  echo "omabox: try: omabox launch ${ident} --print" >&2
+  return 1
+}
+
+cmd_launch() {
+  local ident=${1:?service id or key}
+  if [[ ${2:-} == --print ]]; then
+    local spec browser
+    spec=$(python launch-spec "$ident")
+    browser=$(resolve_browser 0)
+    local -a args=()
+    local arg
+    while IFS= read -r arg; do
+      args+=("$arg")
+    done < <(python3 -c 'import json,sys; print("\n".join(json.load(sys.stdin)["args"]))' <<<"$spec")
     print_launch "$browser" "${args[@]}"
     return
   fi
-  echo "omabox: launching ${ident}" >&2
-  run_launch "$browser" "${args[@]}"
-  if have hyprctl; then
-    wait_and_show "$class_name" "$regex"
-  fi
+  open_service "$ident"
 }
 
 cmd_toggle() {
   if [[ ${1:-} == --print ]]; then
-    echo "hyprctl dispatch togglespecialworkspace omabox"
+    print_dispatch "$(dispatch_expr_toggle)"
     return
   fi
   have hyprctl || die "hyprctl is not available"
-  hyprctl dispatch togglespecialworkspace omabox >/dev/null
+  run_dispatch "$(dispatch_expr_toggle)"
 }
 
 cmd_focus() {
   local ident=${1:?service id or key}
-  local print=0
   if [[ ${2:-} == --print ]]; then
-    print=1
-  fi
-  local spec class_name regex
-  spec=$(python launch-spec "$ident")
-  class_name=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["class"])' <<<"$spec")
-  regex=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["classRegex"])' <<<"$spec")
-  if (( print )); then
+    local spec class_name
+    spec=$(python launch-spec "$ident")
+    class_name=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["class"])' <<<"$spec")
     printf 'class %s\n' "$class_name"
-    printf 'hyprctl dispatch movetoworkspacesilent special:omabox,class:%s\n' "$regex"
-    echo "hyprctl dispatch togglespecialworkspace omabox"
-    printf 'hyprctl dispatch focuswindow class:%s\n' "$regex"
+    echo "single-window special:omabox"
+    printf 'hyprctl dispatch '\''hl.dsp.window.move({ workspace = "special:omabox-hidden", follow = false, window = "address:<other>" })'\''\n'
+    printf 'hyprctl dispatch '\''hl.dsp.window.close({ window = "address:<duplicate>" })'\''\n'
+    print_dispatch "$(dispatch_expr_move "$class_name")"
+    print_dispatch "$(dispatch_expr_toggle)"
+    print_dispatch "$(dispatch_expr_focus "$class_name")"
     return
   fi
   have hyprctl || die "hyprctl is not available"
-  if ! window_open "$class_name"; then
-    cmd_launch "$ident"
-    return
-  fi
-  hyprctl dispatch movetoworkspacesilent "special:omabox,class:$regex" >/dev/null
-  show_special
-  hyprctl dispatch focuswindow "class:$regex" >/dev/null
+  open_service "$ident"
 }
 
 cmd_dashboard() {
@@ -235,14 +290,23 @@ Usage: omabox <command> [args]
   dashboard                    Open the dock's service dashboard
   setup [--menu]               Install keybinds, window rules, and ~/.local/bin/omabox
   uninstall [--purge]          Remove those integrations
+  config [dock always|special-only]
+                               Show or set dock visibility
   fetch-icons                  Cache favicons for services without a bundled icon
   class <url> <profile>        Print the Chromium window class
 
 add options: --id --name --url --icon --profile --key --unread --update
 
 Keys, once `omabox setup` has been reloaded by Hyprland:
-  SUPER+O            toggle the omabox workspace
+  SUPER+SHIFT+O      toggle the omabox workspace (replaces Obsidian)
   SUPER+ALT+1..9     focus the service whose key is that digit
+
+SUPER+O is Omarchy's "Pop window out" bind. SUPER+SHIFT+O launches Obsidian
+while preinstalled binds are on, so the generated file uses o.rebind and that
+chord no longer opens Obsidian. Edit the o.rebind line in
+~/.config/hypr/omabox.lua to pick another chord, then run:
+  hyprctl reload && hyprctl configerrors
+`omabox setup` rewrites omabox.lua, so re-apply a custom chord after setup.
 USAGE
 }
 
@@ -254,10 +318,11 @@ main() {
   fi
   shift
   case $cmd in
-    init | list | add | remove | setup | uninstall | fetch-icons | class | get | rules)
+    init | list | add | remove | setup | uninstall | fetch-icons | class | get | rules | config)
       python "$cmd" "$@"
       if [[ $cmd == setup ]] && have hyprctl; then
         hyprctl reload >/dev/null 2>&1 || true
+        hyprctl configerrors || true
       fi
       ;;
     launch) cmd_launch "$@" ;;

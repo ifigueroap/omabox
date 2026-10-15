@@ -30,6 +30,37 @@ printf 'chrome-%s_%s-Default\n' "${host,,}" "${path:-/}" | sed 's|/|_|g'
 """
 
 
+class FocusPlanTests(unittest.TestCase):
+    def test_one_visible_window_and_exact_class(self) -> None:
+        target = "chrome-web.whatsapp.com__-WhatsApp"
+        slack = "chrome-app.slack.com__-Slack"
+        clients = [
+            {"address": "0xaaa", "class": target, "workspace": {"name": "special:omabox"}},
+            {"address": "0xbbb", "class": target, "workspace": {"name": "special:omabox"}},
+            {"address": "0xccc", "class": slack, "workspace": {"name": "special:omabox"}},
+            {"address": "0xddd", "class": "chrome-web.whatsapp.com__-Whatsapp", "workspace": {"name": "special:omabox"}},
+        ]
+        plan = omabox.build_focus_plan(clients, target, [target, slack])
+        self.assertTrue(plan["found"])
+        self.assertEqual(plan["focus"], 'hl.dsp.focus({ window = "class:chrome-web.whatsapp.com__-WhatsApp" })')
+        joined = "\n".join(plan["dispatch"])
+        self.assertIn('hl.dsp.window.move({ workspace = "special:omabox-hidden", follow = false, window = "address:0xccc" })', joined)
+        self.assertIn('hl.dsp.window.close({ window = "address:0xbbb" })', joined)
+        self.assertNotIn("0xaaa", joined)
+        self.assertNotIn("0xddd", joined)
+        self.assertNotIn("Whatsapp", plan["focus"])
+
+        missed = omabox.build_focus_plan(clients, "chrome-web.whatsapp.com__-Whatsapp", [target])
+        self.assertTrue(missed["found"])
+        self.assertIn("Whatsapp", missed["focus"])
+        hidden = omabox.build_focus_plan(
+            [{"address": "0xaaa", "class": target, "workspace": {"name": "special:omabox-hidden"}}],
+            target,
+            [target],
+        )
+        self.assertIn('workspace = "special:omabox"', "\n".join(hidden["dispatch"]))
+
+
 class IpcTests(unittest.TestCase):
     def test_panel_registers_quickshell_ipc_handler(self) -> None:
         source = (ROOT / "Panel.qml").read_text(encoding="utf-8")
@@ -141,6 +172,7 @@ class ConfigTests(unittest.TestCase):
         zulip = next(row for row in payload["services"] if row["id"] == "zulip")
         self.assertEqual(zulip["class"], "")
         self.assertFalse(zulip["ready"])
+        self.assertEqual(payload["dock"], "always")
 
     def test_launch_spec(self) -> None:
         omabox.cmd_init()
@@ -156,7 +188,9 @@ class ConfigTests(unittest.TestCase):
     def test_lua_rules_and_setup_roundtrip(self) -> None:
         omabox.cmd_setup(menu=True)
         lua = (self.home / ".config" / "hypr" / "omabox.lua").read_text(encoding="utf-8")
-        self.assertIn('o.bind("SUPER + O", "Omabox", "omabox toggle")', lua)
+        self.assertIn('o.rebind("SUPER + SHIFT + O", "Omabox", "omabox toggle")', lua)
+        self.assertNotIn('o.bind("SUPER + O", "Omabox", "omabox toggle")', lua)
+        self.assertIn("Obsidian", lua)
         self.assertIn("SUPER + ALT + code:", lua)
         self.assertIn("special:omabox silent", lua)
         self.assertIn(r"^chrome\\-web\\.whatsapp\\.com__\\-WhatsApp$", lua)
@@ -185,6 +219,21 @@ class ConfigTests(unittest.TestCase):
         self.assertFalse(link.exists())
         omabox.cmd_uninstall(purge=True)
         self.assertFalse(omabox.config_dir().exists())
+
+    def test_dock_mode_roundtrip(self) -> None:
+        self.assertEqual(omabox.load_dock_mode(), "always")
+        omabox.cmd_config("dock", "special-only")
+        self.assertEqual(omabox.settings_file().read_text(encoding="utf-8").strip(), 'dock = "special-only"')
+        self.assertEqual(omabox.load_dock_mode(), "special-only")
+        listed = json.loads(subprocess.check_output(
+            [sys.executable, str(ROOT / "lib" / "omabox.py"), "list", "--json"],
+            text=True,
+        ))
+        self.assertEqual(listed["dock"], "special-only")
+        with self.assertRaises(SystemExit):
+            omabox.cmd_config("dock", "sometimes")
+        with self.assertRaises(SystemExit):
+            omabox.cmd_config("theme", "dark")
 
     def test_menu_insert_keeps_existing_entries(self) -> None:
         menu = self.home / ".config" / "omarchy" / "extensions" / "omarchy-menu.jsonc"
@@ -225,12 +274,22 @@ class CliTests(unittest.TestCase):
         self.assertIn("--app=https://web.whatsapp.com/", launch)
         self.assertIn("--no-first-run", launch)
         self.assertNotIn("uwsm-app", launch)
-        self.assertEqual(self.run_cli("toggle", "--print").strip(), "hyprctl dispatch togglespecialworkspace omabox")
+        self.assertEqual(
+            self.run_cli("toggle", "--print").strip(),
+            'hyprctl dispatch \'hl.dsp.workspace.toggle_special("omabox")\'',
+        )
         focus = self.run_cli("focus", "1", "--print")
         self.assertIn("class chrome-web.whatsapp.com__-WhatsApp", focus)
-        self.assertIn("movetoworkspacesilent special:omabox,class:", focus)
-        self.assertIn("togglespecialworkspace omabox", focus)
-        self.assertIn("focuswindow class:", focus)
+        self.assertIn("single-window special:omabox", focus)
+        self.assertIn('workspace = "special:omabox-hidden"', focus)
+        self.assertIn(
+            'hyprctl dispatch \'hl.dsp.focus({ window = "class:chrome-web.whatsapp.com__-WhatsApp" })\'',
+            focus,
+        )
+        self.assertIn('hyprctl dispatch \'hl.dsp.workspace.toggle_special("omabox")\'', focus)
+        self.assertNotIn("togglespecialworkspace", focus)
+        self.assertNotIn("focuswindow", focus)
+        self.assertNotIn("movetoworkspace", focus)
 
     def test_launch_shows_workspace_after_window_exists(self) -> None:
         bindir = self.home / "bin"
@@ -241,7 +300,15 @@ class CliTests(unittest.TestCase):
             "#!/bin/bash\n"
             'printf "%s\\n" "$*" >> "$OMABOX_HYPR_LOG"\n'
             'if [[ $1 == -j && $2 == clients ]]; then\n'
-            '  printf "%s\\n" \'[{"class":"chrome-web.whatsapp.com__-WhatsApp"}]\'\n'
+            "  lines=0\n"
+            '  if [[ -f $OMABOX_LAUNCH_LOG ]]; then\n'
+            '    lines=$(grep -c . "$OMABOX_LAUNCH_LOG" || true)\n'
+            "  fi\n"
+            '  if [[ ${lines:-0} -ge 1 ]]; then\n'
+            '    printf "%s\\n" \'[{"class":"chrome-web.whatsapp.com__-WhatsApp"}]\'\n'
+            "  else\n"
+            "    printf '%s\\n' '[]'\n"
+            "  fi\n"
             'elif [[ $1 == -j && $2 == monitors ]]; then\n'
             '  printf "%s\\n" \'[{"specialWorkspace":{"name":""}}]\'\n'
             "fi\n"
@@ -267,8 +334,146 @@ class CliTests(unittest.TestCase):
         self.assertIn("--profile-directory=WhatsApp", launched)
         self.assertIn("--app=https://web.whatsapp.com/", launched)
         hypr = hypr_log.read_text(encoding="utf-8")
-        self.assertLess(hypr.index("-j clients"), hypr.index("dispatch togglespecialworkspace omabox"))
-        self.assertIn("dispatch focuswindow class:", hypr)
+        self.assertLess(hypr.index("-j clients"), hypr.index('dispatch hl.dsp.workspace.toggle_special("omabox")'))
+        self.assertIn(
+            'dispatch hl.dsp.window.move({ workspace = "special:omabox", follow = false, window = "class:chrome-web.whatsapp.com__-WhatsApp" })',
+            hypr,
+        )
+        self.assertIn('dispatch hl.dsp.focus({ window = "class:chrome-web.whatsapp.com__-WhatsApp" })', hypr)
+        self.assertNotIn("togglespecialworkspace", hypr)
+        self.assertNotIn("focuswindow", hypr)
+
+    def test_focus_reveals_existing_window_without_launch(self) -> None:
+        bindir = self.home / "bin"
+        bindir.mkdir()
+        hypr_log = self.home / "hypr.log"
+        launch_log = self.home / "launch.log"
+        (bindir / "hyprctl").write_text(
+            "#!/bin/bash\n"
+            'printf "%s\\n" "$*" >> "$OMABOX_HYPR_LOG"\n'
+            'if [[ $1 == -j && $2 == clients ]]; then\n'
+            '  printf "%s\\n" \'[{"class":"chrome-web.whatsapp.com__-WhatsApp"}]\'\n'
+            'elif [[ $1 == -j && $2 == monitors ]]; then\n'
+            '  printf "%s\\n" \'[{"specialWorkspace":{"name":""}}]\'\n'
+            "fi\n"
+            "exit 0\n",
+            encoding="utf-8",
+        )
+        (bindir / "uwsm-app").write_text("#!/bin/bash\nprintf '%s\\n' \"$*\" >> \"$OMABOX_LAUNCH_LOG\"\nexit 0\n", encoding="utf-8")
+        (bindir / "chromium").write_text("#!/bin/bash\nexit 0\n", encoding="utf-8")
+        for name in ("hyprctl", "uwsm-app", "chromium"):
+            (bindir / name).chmod(0o755)
+        env = self.env.copy()
+        env["PATH"] = f"{bindir}:/usr/bin:/bin"
+        env["OMABOX_HYPR_LOG"] = str(hypr_log)
+        env["OMABOX_LAUNCH_LOG"] = str(launch_log)
+        subprocess.check_call([str(ROOT / "bin" / "omabox"), "focus", "whatsapp"], env=env)
+        self.assertFalse(launch_log.exists())
+        hypr = hypr_log.read_text(encoding="utf-8")
+        self.assertIn('dispatch hl.dsp.workspace.toggle_special("omabox")', hypr)
+        self.assertIn('dispatch hl.dsp.focus({ window = "class:chrome-web.whatsapp.com__-WhatsApp" })', hypr)
+
+    def test_focus_parks_other_services_and_closes_duplicates(self) -> None:
+        bindir = self.home / "bin"
+        bindir.mkdir()
+        hypr_log = self.home / "hypr.log"
+        launch_log = self.home / "launch.log"
+        whatsapp = "chrome-web.whatsapp.com__-WhatsApp"
+        slack = omabox.window_class("https://app.slack.com/", "Slack")
+        clients = json.dumps(
+            [
+                {"address": "0xaaa", "class": whatsapp, "workspace": {"name": "special:omabox"}},
+                {"address": "0xbbb", "class": whatsapp, "workspace": {"name": "special:omabox"}},
+                {"address": "0xccc", "class": slack, "workspace": {"name": "special:omabox"}},
+            ]
+        )
+        (bindir / "hyprctl").write_text(
+            "#!/bin/bash\n"
+            'printf "%s\\n" "$*" >> "$OMABOX_HYPR_LOG"\n'
+            'if [[ $1 == -j && $2 == clients ]]; then\n'
+            f"  printf '%s\\n' {clients!r}\n"
+            'elif [[ $1 == -j && $2 == monitors ]]; then\n'
+            '  printf "%s\\n" \'[{"specialWorkspace":{"name":""}}]\'\n'
+            "fi\n"
+            "exit 0\n",
+            encoding="utf-8",
+        )
+        (bindir / "uwsm-app").write_text("#!/bin/bash\nprintf '%s\\n' \"$*\" >> \"$OMABOX_LAUNCH_LOG\"\nexit 0\n", encoding="utf-8")
+        (bindir / "chromium").write_text("#!/bin/bash\nexit 0\n", encoding="utf-8")
+        for name in ("hyprctl", "uwsm-app", "chromium"):
+            (bindir / name).chmod(0o755)
+        env = self.env.copy()
+        env["PATH"] = f"{bindir}:/usr/bin:/bin"
+        env["OMABOX_HYPR_LOG"] = str(hypr_log)
+        env["OMABOX_LAUNCH_LOG"] = str(launch_log)
+        subprocess.check_call([str(ROOT / "bin" / "omabox"), "focus", "whatsapp"], env=env)
+        self.assertFalse(launch_log.exists())
+        hypr = hypr_log.read_text(encoding="utf-8")
+        self.assertLess(
+            hypr.index('dispatch hl.dsp.window.move({ workspace = "special:omabox-hidden", follow = false, window = "address:0xccc" })'),
+            hypr.index('dispatch hl.dsp.focus({ window = "class:chrome-web.whatsapp.com__-WhatsApp" })'),
+        )
+        self.assertIn('dispatch hl.dsp.window.close({ window = "address:0xbbb" })', hypr)
+        self.assertNotIn("address:0xaaa", hypr)
+
+    def test_launch_runs_once_when_no_window_exists(self) -> None:
+        bindir = self.home / "bin"
+        bindir.mkdir()
+        hypr_log = self.home / "hypr.log"
+        launch_log = self.home / "launch.log"
+        user_data = self.home / ".local" / "share" / "omabox" / "chromium"
+        proc = self.home / "proc" / "424242"
+        proc.mkdir(parents=True)
+        (proc / "cmdline").write_bytes(b"chromium\0--user-data-dir=" + str(user_data).encode() + b"\0")
+        (bindir / "hyprctl").write_text(
+            "#!/bin/bash\n"
+            'printf "%s\\n" "$*" >> "$OMABOX_HYPR_LOG"\n'
+            'if [[ $1 == -j && $2 == clients ]]; then\n'
+            "  lines=0\n"
+            '  if [[ -f $OMABOX_LAUNCH_LOG ]]; then lines=$(grep -c . "$OMABOX_LAUNCH_LOG" || true); fi\n'
+            '  if [[ ${lines:-0} -ge 2 ]]; then\n'
+            '    printf "%s\\n" \'[{"class":"chrome-web.whatsapp.com__-WhatsApp"}]\'\n'
+            "  else\n"
+            "    printf '%s\\n' '[]'\n"
+            "  fi\n"
+            'elif [[ $1 == -j && $2 == monitors ]]; then\n'
+            '  printf "%s\\n" \'[{"specialWorkspace":{"name":""}}]\'\n'
+            "fi\n"
+            "exit 0\n",
+            encoding="utf-8",
+        )
+        (bindir / "uwsm-app").write_text("#!/bin/bash\nprintf '%s\\n' \"$*\" >> \"$OMABOX_LAUNCH_LOG\"\nexit 0\n", encoding="utf-8")
+        (bindir / "chromium").write_text("#!/bin/bash\nexit 0\n", encoding="utf-8")
+        for name in ("hyprctl", "uwsm-app", "chromium"):
+            (bindir / name).chmod(0o755)
+        env = self.env.copy()
+        env["PATH"] = f"{bindir}:/usr/bin:/bin"
+        env["OMABOX_HYPR_LOG"] = str(hypr_log)
+        env["OMABOX_LAUNCH_LOG"] = str(launch_log)
+        env["OMABOX_PROC_ROOT"] = str(self.home / "proc")
+        env["OMABOX_WINDOW_WAIT_TICKS"] = "1"
+        result = subprocess.run(
+            [str(ROOT / "bin" / "omabox"), "focus", "whatsapp"],
+            env=env,
+            check=False,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        self.assertEqual(result.returncode, 1)
+        self.assertNotIn("launching whatsapp again", result.stderr)
+        launched = launch_log.read_text(encoding="utf-8").strip().splitlines()
+        self.assertEqual(len(launched), 1)
+
+    def test_chromium_pids_match_the_shared_browser_only(self) -> None:
+        proc = self.home / "proc"
+        data = str(self.home / ".local" / "share" / "omabox" / "chromium")
+        (proc / "42").mkdir(parents=True)
+        (proc / "42" / "cmdline").write_bytes(f"chromium\0--user-data-dir={data}\0".encode())
+        (proc / "7").mkdir()
+        (proc / "7" / "cmdline").write_bytes(f"bash\0--user-data-dir={data}\0".encode())
+        (proc / "9").mkdir()
+        (proc / "9" / "cmdline").write_bytes(b"chromium\0--user-data-dir=/tmp/other\0")
+        self.assertEqual(omabox.chromium_pids(data, proc), ["42"])
 
     def test_list_and_class(self) -> None:
         listed = self.run_cli("list")

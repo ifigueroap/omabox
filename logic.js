@@ -59,7 +59,16 @@ function normAddress(value) {
   return text
 }
 
+// Dock shape on screen. `latched` stays true briefly after the pointer leaves
+// so the expanded dock does not collapse between the notch and an icon.
+function dockPresentation(mode, onOmabox, latched) {
+  if (mode === "special-only") return onOmabox ? "full" : "hidden"
+  if (onOmabox || latched) return "full"
+  return "notch"
+}
+
 // Hyprland windowtitlev2 payload is "ADDRESS,title" and the title may contain commas.
+
 function eventTitle(data) {
   var text = String(data || "")
   var comma = text.indexOf(",")
@@ -73,6 +82,7 @@ if (typeof module === "object" && module.exports) {
     windowClass: windowClass,
     unreadCount: unreadCount,
     normAddress: normAddress,
+    dockPresentation: dockPresentation,
     eventTitle: eventTitle
   }
 }

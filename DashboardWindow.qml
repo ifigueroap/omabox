@@ -37,6 +37,10 @@ PanelWindow {
   property string formProfile: ""
   property string formKey: ""
   property string formId: ""
+  readonly property var dockChoices: [
+    { "mode": "always", "label": "Always" },
+    { "mode": "special-only", "label": "Workspace only" }
+  ]
 
   function fillPreset(service) {
     formId = service.id
@@ -83,6 +87,7 @@ PanelWindow {
       RowLayout {
         Layout.fillWidth: true
         Text {
+          textFormat: Text.PlainText
           text: "Omabox"
           color: Commons.Color.popups.text
           font.family: Style.font.family
@@ -101,10 +106,54 @@ PanelWindow {
       Text {
         Layout.fillWidth: true
         wrapMode: Text.WordWrap
-        text: "Services share one Chromium (--user-data-dir) and keep a profile each. SUPER+O shows them."
+        textFormat: Text.PlainText
+        text: "Services share one Chromium (--user-data-dir) and keep a profile each. Super+Shift+O toggles the workspace. The bar icon does the same."
         color: Commons.Color.muted
         font.family: Style.font.family
         font.pixelSize: Style.font.bodySmall
+      }
+
+      RowLayout {
+        Layout.fillWidth: true
+        spacing: Style.spacing.xs
+        Text {
+          textFormat: Text.PlainText
+          text: "Dock"
+          color: Commons.Color.popups.text
+          font.family: Style.font.family
+          font.pixelSize: Style.font.body
+        }
+        Repeater {
+          model: dashboard.dockChoices
+          delegate: Rectangle {
+            required property var modelData
+            readonly property bool selected: dashboard.host && dashboard.host.dockMode === modelData.mode
+            Layout.preferredHeight: Style.spacing.controlHeight
+            Layout.preferredWidth: label.implicitWidth + Style.spacing.controlPaddingX * 2
+            radius: Style.space(6)
+            color: selected ? Commons.Color.menu.selectedBackground : "transparent"
+            border.color: Commons.Color.popups.border
+            border.width: Style.normalBorderWidth
+
+            Text {
+              id: label
+              anchors.centerIn: parent
+              textFormat: Text.PlainText
+              text: modelData.label
+              color: Commons.Color.popups.text
+              font.family: Style.font.family
+              font.pixelSize: Style.font.bodySmall
+            }
+
+            MouseArea {
+              anchors.fill: parent
+              onClicked: {
+                if (!dashboard.host) return
+                dashboard.host.run(["config", "dock", modelData.mode])
+              }
+            }
+          }
+        }
       }
 
       Flickable {
@@ -135,6 +184,7 @@ PanelWindow {
                 spacing: Style.spacing.labelGap
 
                 Text {
+                  textFormat: Text.PlainText
                   text: modelData.key ? modelData.key : "·"
                   color: Commons.Color.accent
                   font.family: Style.font.family
@@ -145,6 +195,7 @@ PanelWindow {
                   Layout.fillWidth: true
                   spacing: 0
                   Text {
+                    textFormat: Text.PlainText
                     text: modelData.name
                     color: Commons.Color.popups.text
                     font.family: Style.font.family
@@ -153,6 +204,7 @@ PanelWindow {
                     Layout.fillWidth: true
                   }
                   Text {
+                    textFormat: Text.PlainText
                     text: modelData.ready ? modelData.url : "Needs a URL"
                     color: Commons.Color.muted
                     font.family: Style.font.family

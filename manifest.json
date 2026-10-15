@@ -5,9 +5,17 @@
   "version": "1.0.0",
   "author": "ifigueroap",
   "description": "Rambox-like multi-account web app dock. One Chromium, one profile per service, on Hyprland special workspace omabox.",
-  "kinds": ["panel"],
+  "kinds": ["panel", "bar-widget"],
   "keepLoaded": true,
   "entryPoints": {
-    "panel": "Panel.qml"
+    "panel": "Panel.qml",
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "Omabox",
+    "description": "Open the Omabox special workspace",
+    "category": "Apps",
+    "allowMultiple": false,
+    "defaultSection": "right"
   }
 }

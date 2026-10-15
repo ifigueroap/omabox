@@ -53,6 +53,48 @@ def config_file() -> Path:
     return config_dir() / "services.toml"
 
 
+DOCK_MODES = ("always", "special-only")
+
+
+def settings_file() -> Path:
+    return config_dir() / "config.toml"
+
+
+def load_dock_mode() -> str:
+    path = settings_file()
+    if not path.is_file():
+        return "always"
+    try:
+        data = tomllib.loads(path.read_text(encoding="utf-8"))
+    except tomllib.TOMLDecodeError:
+        return "always"
+    mode = data.get("dock")
+    if isinstance(mode, str) and mode in DOCK_MODES:
+        return mode
+    return "always"
+
+
+def write_dock_mode(mode: str) -> None:
+    if mode not in DOCK_MODES:
+        die("dock must be 'always' or 'special-only'")
+    path = settings_file()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(f'dock = "{mode}"\n', encoding="utf-8")
+
+
+def cmd_config(key: str = "", value: str = "") -> None:
+    if not key:
+        print(f"dock={load_dock_mode()}")
+        return
+    if key != "dock":
+        die(f"unknown setting '{key}'")
+    if not value:
+        print(load_dock_mode())
+        return
+    write_dock_mode(value)
+    print(value)
+
+
 def data_dir() -> Path:
     return home() / ".local" / "share" / "omabox"
 
@@ -120,6 +162,159 @@ def class_regex(class_name: str) -> str:
     if not class_name:
         return ""
     return "^" + re.escape(class_name) + "$"
+
+
+VISIBLE_WORKSPACE = "special:omabox"
+HIDDEN_WORKSPACE = "special:omabox-hidden"
+ADDRESS_RE = re.compile(r"^0x[0-9a-fA-F]+$")
+
+
+def lua_quote(value: str) -> str:
+    return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def reported_class(client: dict) -> str:
+    """Hyprland class, case-sensitive. Empty class falls back to initialClass."""
+    value = client.get("class")
+    if isinstance(value, str) and value:
+        return value
+    for key in ("initialClass", "initial_class"):
+        value = client.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return ""
+
+
+def client_address(client: dict) -> str:
+    address = client.get("address") or ""
+    if not isinstance(address, str):
+        return ""
+    return address if ADDRESS_RE.fullmatch(address) else ""
+
+
+def workspace_name(client: dict) -> str:
+    workspace = client.get("workspace")
+    if isinstance(workspace, str):
+        return workspace
+    if isinstance(workspace, dict):
+        name = workspace.get("name") or ""
+        return name if isinstance(name, str) else ""
+    return ""
+
+
+def on_workspace(name: str, workspace: str) -> bool:
+    bare = workspace.removeprefix("special:")
+    return name == workspace or name == bare or name == f"special:{bare}"
+
+
+def expr_move(workspace: str, selector: str) -> str:
+    return (
+        "hl.dsp.window.move({ workspace = "
+        + lua_quote(workspace)
+        + ", follow = false, window = "
+        + lua_quote(selector)
+        + " })"
+    )
+
+
+def expr_close(address: str) -> str:
+    return "hl.dsp.window.close({ window = " + lua_quote(f"address:{address}") + " })"
+
+
+def expr_focus(class_name: str) -> str:
+    return "hl.dsp.focus({ window = " + lua_quote(f"class:{class_name}") + " })"
+
+
+def build_focus_plan(clients: list, target_class: str, managed_classes: list[str]) -> dict:
+    """One visible Omabox window: the target class on special:omabox.
+
+    Other managed windows move to special:omabox-hidden. Extra windows of the
+    target class are closed so a service keeps a single window. Class match
+    is case-sensitive (WhatsApp is not Whatsapp).
+    """
+    managed = set(managed_classes)
+    managed.add(target_class)
+    targets: list[dict] = []
+    others: list[dict] = []
+    for client in clients:
+        if not isinstance(client, dict):
+            continue
+        klass = reported_class(client)
+        if klass == target_class:
+            targets.append(client)
+        elif klass in managed:
+            others.append(client)
+    if not targets:
+        return {"found": False, "dispatch": [], "focus": "", "warnings": []}
+
+    def rank(client: dict) -> tuple[int, int]:
+        visible = 0 if on_workspace(workspace_name(client), VISIBLE_WORKSPACE) else 1
+        return (visible, 0)
+
+    keeper = sorted(enumerate(targets), key=lambda item: (rank(item[1]), item[0]))[0][1]
+    keeper_address = client_address(keeper)
+    dispatch: list[str] = []
+    warnings: list[str] = []
+    for client in others:
+        if on_workspace(workspace_name(client), HIDDEN_WORKSPACE):
+            continue
+        address = client_address(client)
+        if not address:
+            warnings.append(f"no address for {reported_class(client)}; left it where it is")
+            continue
+        dispatch.append(expr_move(HIDDEN_WORKSPACE, f"address:{address}"))
+    for client in targets:
+        if client is keeper:
+            continue
+        address = client_address(client)
+        if not address:
+            warnings.append(f"duplicate {target_class} has no address; left it open")
+            continue
+        dispatch.append(expr_close(address))
+    if keeper_address and not on_workspace(workspace_name(keeper), VISIBLE_WORKSPACE):
+        dispatch.append(expr_move(VISIBLE_WORKSPACE, f"address:{keeper_address}"))
+    elif not keeper_address:
+        dispatch.append(expr_move(VISIBLE_WORKSPACE, f"class:{target_class}"))
+    return {
+        "found": True,
+        "dispatch": dispatch,
+        "focus": expr_focus(target_class),
+        "warnings": warnings,
+    }
+
+
+def chromium_pids(user_data: str, proc_root: Path | None = None) -> list[str]:
+    """PIDs whose cmdline contains this Chromium --user-data-dir.
+
+    Omabox profiles share one user-data-dir, so these are every Omabox
+    browser process, not a single profile. proc_root defaults to /proc and
+    can be pointed at a fixture with OMABOX_PROC_ROOT.
+    """
+    needle = (user_data or "").encode()
+    if not needle:
+        return []
+    root = proc_root
+    if root is None:
+        override = os.environ.get("OMABOX_PROC_ROOT")
+        root = Path(override) if override else Path("/proc")
+    if not root.is_dir():
+        return []
+    found: list[str] = []
+    for entry in root.iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            raw = (entry / "cmdline").read_bytes()
+        except OSError:
+            continue
+        argv = [part for part in raw.split(b"\0") if part]
+        # Match the executable, not the --user-data-dir path (that path
+        # itself contains "chromium").
+        exe = argv[0].rsplit(b"/", 1)[-1].lower() if argv else b""
+        if needle not in raw or b"chrom" not in exe:
+            continue
+        found.append(entry.name)
+    return sorted(found, key=int)
 
 
 def normalize_url(url: str, allow_empty: bool = False) -> str:
@@ -323,7 +518,7 @@ def cmd_init(force: bool = False, announce: bool = True) -> None:
 def cmd_list(as_json: bool) -> None:
     services = [public_service(service) for service in load_services()]
     if as_json:
-        json.dump({"services": services}, sys.stdout)
+        json.dump({"services": services, "dock": load_dock_mode()}, sys.stdout)
         sys.stdout.write("\n")
         return
     if not services:
@@ -461,11 +656,16 @@ def render_lua(services: list[dict] | None = None) -> str:
         "-- GenerateApplicationNameFromURL + os_integration/web_app_shortcut_linux.cc GetShortcutFileName):",
         "--   chrome-<host>_<path>-<profile>, then '/' and spaces become '_'.",
         "-- Omarchy's bin/omarchy-webapp-window-class is the profile=Default case.",
-        "if type(o) ~= \"table\" or type(o.bind) ~= \"function\" or type(o.window) ~= \"function\" then",
+        "if type(o) ~= \"table\" or type(o.rebind) ~= \"function\" or type(o.window) ~= \"function\" then",
         "  return",
         "end",
         "",
-        'o.bind("SUPER + O", "Omabox", "omabox toggle")',
+        "-- Super+O is \"Pop window out\" (default/hypr/bindings/tiling.lua).",
+        "-- Super+Shift+O is Obsidian while preinstalled binds are enabled",
+        "-- (default/hypr/bindings/applications.lua). o.rebind replaces Obsidian.",
+        "-- `omabox setup`, `omabox add`, and `omabox remove` rewrite this file.",
+        "-- Then: hyprctl reload && hyprctl configerrors",
+        'o.rebind("SUPER + SHIFT + O", "Omabox", "omabox toggle")',
         "for service = 1, 9 do",
         "  o.bind(",
         '    "SUPER + ALT + code:" .. tostring(service + 9),',
@@ -480,6 +680,8 @@ def render_lua(services: list[dict] | None = None) -> str:
         if not cls:
             continue
         pattern = class_regex(cls).replace("\\", "\\\\").replace('"', '\\"')
+        # Wiki window-rule effect `workspace` may be suffixed with " silent".
+        # o.window() forwards that table to hl.window_rule (default/hypr/helpers.lua).
         lines.append(f'o.window("{pattern}", {{ workspace = "special:omabox silent" }})')
     lines.append("")
     return "\n".join(lines)
@@ -634,6 +836,43 @@ def cmd_uninstall(purge: bool) -> None:
         print(f"Kept {config_file()} and {data_dir()}. Pass --purge to delete them.")
 
 
+def managed_classes() -> list[str]:
+    classes: list[str] = []
+    for service in load_services():
+        if not service["url"]:
+            continue
+        klass = window_class(service["url"], service["profile"])
+        if klass and klass not in classes:
+            classes.append(klass)
+    return classes
+
+
+def cmd_focus_plan(target_class: str) -> None:
+    raw = sys.stdin.read()
+    if not raw.strip():
+        print("omabox: hyprctl clients produced no output", file=sys.stderr)
+        raise SystemExit(2)
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        print(f"omabox: could not parse hyprctl clients: {exc}", file=sys.stderr)
+        raise SystemExit(2) from exc
+    if isinstance(parsed, dict):
+        parsed = parsed.get("clients") or parsed.get("windows") or []
+    if not isinstance(parsed, list):
+        print("omabox: hyprctl clients was not a list", file=sys.stderr)
+        raise SystemExit(2)
+    plan = build_focus_plan(parsed, target_class, managed_classes())
+    json.dump(plan, sys.stdout)
+    sys.stdout.write("\n")
+    raise SystemExit(0 if plan["found"] else 1)
+
+
+def cmd_chromium_pids(user_data: str) -> None:
+    for pid in chromium_pids(user_data):
+        print(pid)
+
+
 def cmd_launch_spec(ident: str) -> None:
     services = load_services()
     if re.fullmatch(r"[1-9]", ident):
@@ -697,6 +936,10 @@ def build_parser() -> argparse.ArgumentParser:
     listing = sub.add_parser("list")
     listing.add_argument("--json", action="store_true")
 
+    config = sub.add_parser("config")
+    config.add_argument("key", nargs="?", default="")
+    config.add_argument("value", nargs="?", default="")
+
     get = sub.add_parser("get")
     get.add_argument("id")
 
@@ -729,6 +972,12 @@ def build_parser() -> argparse.ArgumentParser:
     spec = sub.add_parser("launch-spec")
     spec.add_argument("id")
 
+    pids = sub.add_parser("chromium-pids")
+    pids.add_argument("user_data")
+
+    plan = sub.add_parser("focus-plan")
+    plan.add_argument("class_name")
+
     sub.add_parser("fetch-icons")
     return parser
 
@@ -739,6 +988,8 @@ def main(argv: list[str] | None = None) -> None:
         cmd_init(force=args.force)
     elif args.command == "list":
         cmd_list(as_json=args.json)
+    elif args.command == "config":
+        cmd_config(args.key, args.value)
     elif args.command == "get":
         cmd_get(args.id)
     elif args.command == "class":
@@ -755,6 +1006,10 @@ def main(argv: list[str] | None = None) -> None:
         cmd_uninstall(purge=args.purge)
     elif args.command == "launch-spec":
         cmd_launch_spec(args.id)
+    elif args.command == "chromium-pids":
+        cmd_chromium_pids(args.user_data)
+    elif args.command == "focus-plan":
+        cmd_focus_plan(args.class_name)
     elif args.command == "fetch-icons":
         cmd_fetch_icons()
     else:
