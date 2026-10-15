@@ -129,11 +129,12 @@ print_dispatch() {
 wait_and_show() {
   local class_name=$1
   local ticks=${OMABOX_WINDOW_WAIT_TICKS:-80}
-  local i
+  local i status
   for (( i = 0; i < ticks; i++ )); do
-    if window_open "$class_name"; then
-      reveal_window "$class_name"
-      return 0
+    show_only "$class_name" && return 0
+    status=$?
+    if [[ $status -eq 2 ]]; then
+      return 1
     fi
     sleep 0.25
   done
@@ -156,23 +157,6 @@ sys.exit(1)
 '
 }
 
-window_open() {
-  local class_name=$1
-  have hyprctl || return 1
-  hyprctl -j clients 2>/dev/null | python3 -c '
-import json, sys
-wanted = sys.argv[1]
-try:
-    clients = json.load(sys.stdin)
-except Exception:
-    sys.exit(1)
-for client in clients:
-    if client.get("class") == wanted or client.get("initialClass") == wanted:
-        sys.exit(0)
-sys.exit(1)
-' "$class_name"
-}
-
 show_special() {
   if special_shown; then
     return 0
@@ -180,60 +164,53 @@ show_special() {
   run_dispatch "$(dispatch_expr_toggle)"
 }
 
-reveal_window() {
+# Show only this service. Other Omabox windows move to special:omabox-hidden.
+# Extra windows of this class are closed. Returns 0 when a window was shown,
+# 1 when none exists, 2 when Hyprland's client list could not be read.
+show_only() {
   local class_name=$1
-  run_dispatch "$(dispatch_expr_move "$class_name")"
-  show_special
-  run_dispatch "$(dispatch_expr_focus "$class_name")"
-}
-
-# One Chromium process owns every Omabox profile (one --user-data-dir).
-# A second --app launch is handed to that process; if it never maps a window,
-# restarting the process is what creates a new one.
-restart_omabox_chromium() {
-  local user_data=$1
-  local pids pid
-  pids=$(python chromium-pids "$user_data" || true)
-  if [[ -z ${pids//[[:space:]]/} ]]; then
+  local plan status expr warning focus_expr
+  set +e
+  plan=$(hyprctl -j clients 2>/dev/null | python focus-plan "$class_name")
+  status=$?
+  set -e
+  if [[ $status -eq 2 ]]; then
+    echo "omabox: could not read Hyprland clients; not launching another window" >&2
+    return 2
+  fi
+  if [[ $status -ne 0 ]]; then
     return 1
   fi
-  echo "omabox: Chromium has the Omabox session but Hyprland has no window for this service." >&2
-  echo "omabox: restarting that browser. Every Omabox profile shares this process, so the others close too." >&2
-  while IFS= read -r pid; do
-    [[ -n $pid ]] || continue
-    kill "$pid" 2>/dev/null || true
-  done <<<"$pids"
-  local ticks=${OMABOX_CHROME_EXIT_TICKS:-20}
-  local i
-  for (( i = 0; i < ticks; i++ )); do
-    pids=$(python chromium-pids "$user_data" || true)
-    if [[ -z ${pids//[[:space:]]/} ]]; then
-      return 0
-    fi
-    sleep 0.25
-  done
-  while IFS= read -r pid; do
-    [[ -n $pid ]] || continue
-    kill -KILL "$pid" 2>/dev/null || true
-  done <<<"$pids"
-  sleep 0.25
+  while IFS= read -r warning; do
+    [[ -n $warning ]] || continue
+    echo "omabox: ${warning}" >&2
+  done < <(python3 -c 'import json,sys; print("\n".join(json.loads(sys.argv[1])["warnings"]))' "$plan")
+  while IFS= read -r expr; do
+    [[ -n $expr ]] || continue
+    run_dispatch "$expr"
+  done < <(python3 -c 'import json,sys; print("\n".join(json.loads(sys.argv[1])["dispatch"]))' "$plan")
+  show_special
+  focus_expr=$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["focus"])' "$plan")
+  run_dispatch "$focus_expr"
   return 0
 }
 
 open_service() {
   local ident=$1
-  local spec browser class_name user_data
+  local spec browser class_name status
   spec=$(python launch-spec "$ident")
   class_name=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["class"])' <<<"$spec")
-  user_data=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["userDataDir"])' <<<"$spec")
   local -a args=()
   local arg
   while IFS= read -r arg; do
     args+=("$arg")
   done < <(python3 -c 'import json,sys; print("\n".join(json.load(sys.stdin)["args"]))' <<<"$spec")
-  if have hyprctl && window_open "$class_name"; then
-    reveal_window "$class_name"
-    return 0
+  if have hyprctl; then
+    show_only "$class_name" && return 0
+    status=$?
+    if [[ $status -eq 2 ]]; then
+      return 1
+    fi
   fi
   browser=$(resolve_browser 1)
   echo "omabox: launching ${ident}" >&2
@@ -243,13 +220,6 @@ open_service() {
   fi
   if wait_and_show "$class_name"; then
     return 0
-  fi
-  if restart_omabox_chromium "$user_data"; then
-    echo "omabox: launching ${ident} again" >&2
-    run_launch "$browser" "${args[@]}"
-    if wait_and_show "$class_name"; then
-      return 0
-    fi
   fi
   echo "omabox: no window appeared for class ${class_name}" >&2
   echo "omabox: try: omabox launch ${ident} --print" >&2
@@ -289,6 +259,9 @@ cmd_focus() {
     spec=$(python launch-spec "$ident")
     class_name=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["class"])' <<<"$spec")
     printf 'class %s\n' "$class_name"
+    echo "single-window special:omabox"
+    printf 'hyprctl dispatch '\''hl.dsp.window.move({ workspace = "special:omabox-hidden", follow = false, window = "address:<other>" })'\''\n'
+    printf 'hyprctl dispatch '\''hl.dsp.window.close({ window = "address:<duplicate>" })'\''\n'
     print_dispatch "$(dispatch_expr_move "$class_name")"
     print_dispatch "$(dispatch_expr_toggle)"
     print_dispatch "$(dispatch_expr_focus "$class_name")"
@@ -323,14 +296,14 @@ Usage: omabox <command> [args]
 add options: --id --name --url --icon --profile --key --unread --update
 
 Keys, once `omabox setup` has been reloaded by Hyprland:
-  SUPER+ALT+O        toggle the omabox workspace
+  SUPER+SHIFT+O      toggle the omabox workspace (replaces Obsidian)
   SUPER+ALT+1..9     focus the service whose key is that digit
 
-SUPER+O is Omarchy's "Pop window out" bind, and SUPER+SHIFT+O launches
-Obsidian while preinstalled binds are on. The generated toggle uses the free
-SUPER+ALT+O chord. Edit the o.bind line in ~/.config/hypr/omabox.lua to change
-it. If the chord you want is already taken, use o.rebind with the same
-arguments, then run: hyprctl reload && hyprctl configerrors
+SUPER+O is Omarchy's "Pop window out" bind. SUPER+SHIFT+O launches Obsidian
+while preinstalled binds are on, so the generated file uses o.rebind and that
+chord no longer opens Obsidian. Edit the o.rebind line in
+~/.config/hypr/omabox.lua to pick another chord, then run:
+  hyprctl reload && hyprctl configerrors
 `omabox setup` rewrites omabox.lua, so re-apply a custom chord after setup.
 USAGE
 }

@@ -122,6 +122,125 @@ def class_regex(class_name: str) -> str:
     return "^" + re.escape(class_name) + "$"
 
 
+VISIBLE_WORKSPACE = "special:omabox"
+HIDDEN_WORKSPACE = "special:omabox-hidden"
+ADDRESS_RE = re.compile(r"^0x[0-9a-fA-F]+$")
+
+
+def lua_quote(value: str) -> str:
+    return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def reported_class(client: dict) -> str:
+    """Hyprland class, case-sensitive. Empty class falls back to initialClass."""
+    value = client.get("class")
+    if isinstance(value, str) and value:
+        return value
+    for key in ("initialClass", "initial_class"):
+        value = client.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return ""
+
+
+def client_address(client: dict) -> str:
+    address = client.get("address") or ""
+    if not isinstance(address, str):
+        return ""
+    return address if ADDRESS_RE.fullmatch(address) else ""
+
+
+def workspace_name(client: dict) -> str:
+    workspace = client.get("workspace")
+    if isinstance(workspace, str):
+        return workspace
+    if isinstance(workspace, dict):
+        name = workspace.get("name") or ""
+        return name if isinstance(name, str) else ""
+    return ""
+
+
+def on_workspace(name: str, workspace: str) -> bool:
+    bare = workspace.removeprefix("special:")
+    return name == workspace or name == bare or name == f"special:{bare}"
+
+
+def expr_move(workspace: str, selector: str) -> str:
+    return (
+        "hl.dsp.window.move({ workspace = "
+        + lua_quote(workspace)
+        + ", follow = false, window = "
+        + lua_quote(selector)
+        + " })"
+    )
+
+
+def expr_close(address: str) -> str:
+    return "hl.dsp.window.close({ window = " + lua_quote(f"address:{address}") + " })"
+
+
+def expr_focus(class_name: str) -> str:
+    return "hl.dsp.focus({ window = " + lua_quote(f"class:{class_name}") + " })"
+
+
+def build_focus_plan(clients: list, target_class: str, managed_classes: list[str]) -> dict:
+    """One visible Omabox window: the target class on special:omabox.
+
+    Other managed windows move to special:omabox-hidden. Extra windows of the
+    target class are closed so a service keeps a single window. Class match
+    is case-sensitive (WhatsApp is not Whatsapp).
+    """
+    managed = set(managed_classes)
+    managed.add(target_class)
+    targets: list[dict] = []
+    others: list[dict] = []
+    for client in clients:
+        if not isinstance(client, dict):
+            continue
+        klass = reported_class(client)
+        if klass == target_class:
+            targets.append(client)
+        elif klass in managed:
+            others.append(client)
+    if not targets:
+        return {"found": False, "dispatch": [], "focus": "", "warnings": []}
+
+    def rank(client: dict) -> tuple[int, int]:
+        visible = 0 if on_workspace(workspace_name(client), VISIBLE_WORKSPACE) else 1
+        return (visible, 0)
+
+    keeper = sorted(enumerate(targets), key=lambda item: (rank(item[1]), item[0]))[0][1]
+    keeper_address = client_address(keeper)
+    dispatch: list[str] = []
+    warnings: list[str] = []
+    for client in others:
+        if on_workspace(workspace_name(client), HIDDEN_WORKSPACE):
+            continue
+        address = client_address(client)
+        if not address:
+            warnings.append(f"no address for {reported_class(client)}; left it where it is")
+            continue
+        dispatch.append(expr_move(HIDDEN_WORKSPACE, f"address:{address}"))
+    for client in targets:
+        if client is keeper:
+            continue
+        address = client_address(client)
+        if not address:
+            warnings.append(f"duplicate {target_class} has no address; left it open")
+            continue
+        dispatch.append(expr_close(address))
+    if keeper_address and not on_workspace(workspace_name(keeper), VISIBLE_WORKSPACE):
+        dispatch.append(expr_move(VISIBLE_WORKSPACE, f"address:{keeper_address}"))
+    elif not keeper_address:
+        dispatch.append(expr_move(VISIBLE_WORKSPACE, f"class:{target_class}"))
+    return {
+        "found": True,
+        "dispatch": dispatch,
+        "focus": expr_focus(target_class),
+        "warnings": warnings,
+    }
+
+
 def chromium_pids(user_data: str, proc_root: Path | None = None) -> list[str]:
     """PIDs whose cmdline contains this Chromium --user-data-dir.
 
@@ -495,18 +614,16 @@ def render_lua(services: list[dict] | None = None) -> str:
         "-- GenerateApplicationNameFromURL + os_integration/web_app_shortcut_linux.cc GetShortcutFileName):",
         "--   chrome-<host>_<path>-<profile>, then '/' and spaces become '_'.",
         "-- Omarchy's bin/omarchy-webapp-window-class is the profile=Default case.",
-        "if type(o) ~= \"table\" or type(o.bind) ~= \"function\" or type(o.window) ~= \"function\" then",
+        "if type(o) ~= \"table\" or type(o.rebind) ~= \"function\" or type(o.window) ~= \"function\" then",
         "  return",
         "end",
         "",
-        "-- Super+O is Omarchy's \"Pop window out\" (default/hypr/bindings/tiling.lua).",
-        "-- Super+Shift+O launches Obsidian while preinstalled binds are enabled.",
-        "-- Super+Alt+O is unbound in those defaults, so the toggle uses o.bind.",
+        "-- Super+O is \"Pop window out\" (default/hypr/bindings/tiling.lua).",
+        "-- Super+Shift+O is Obsidian while preinstalled binds are enabled",
+        "-- (default/hypr/bindings/applications.lua). o.rebind replaces Obsidian.",
         "-- `omabox setup`, `omabox add`, and `omabox remove` rewrite this file.",
-        "-- To change the chord, edit the next line. If that chord is already",
-        "-- bound, use o.rebind with the same arguments (it removes the old bind).",
         "-- Then: hyprctl reload && hyprctl configerrors",
-        'o.bind("SUPER + ALT + O", "Omabox", "omabox toggle")',
+        'o.rebind("SUPER + SHIFT + O", "Omabox", "omabox toggle")',
         "for service = 1, 9 do",
         "  o.bind(",
         '    "SUPER + ALT + code:" .. tostring(service + 9),',
@@ -677,6 +794,38 @@ def cmd_uninstall(purge: bool) -> None:
         print(f"Kept {config_file()} and {data_dir()}. Pass --purge to delete them.")
 
 
+def managed_classes() -> list[str]:
+    classes: list[str] = []
+    for service in load_services():
+        if not service["url"]:
+            continue
+        klass = window_class(service["url"], service["profile"])
+        if klass and klass not in classes:
+            classes.append(klass)
+    return classes
+
+
+def cmd_focus_plan(target_class: str) -> None:
+    raw = sys.stdin.read()
+    if not raw.strip():
+        print("omabox: hyprctl clients produced no output", file=sys.stderr)
+        raise SystemExit(2)
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        print(f"omabox: could not parse hyprctl clients: {exc}", file=sys.stderr)
+        raise SystemExit(2) from exc
+    if isinstance(parsed, dict):
+        parsed = parsed.get("clients") or parsed.get("windows") or []
+    if not isinstance(parsed, list):
+        print("omabox: hyprctl clients was not a list", file=sys.stderr)
+        raise SystemExit(2)
+    plan = build_focus_plan(parsed, target_class, managed_classes())
+    json.dump(plan, sys.stdout)
+    sys.stdout.write("\n")
+    raise SystemExit(0 if plan["found"] else 1)
+
+
 def cmd_chromium_pids(user_data: str) -> None:
     for pid in chromium_pids(user_data):
         print(pid)
@@ -780,6 +929,9 @@ def build_parser() -> argparse.ArgumentParser:
     pids = sub.add_parser("chromium-pids")
     pids.add_argument("user_data")
 
+    plan = sub.add_parser("focus-plan")
+    plan.add_argument("class_name")
+
     sub.add_parser("fetch-icons")
     return parser
 
@@ -808,6 +960,8 @@ def main(argv: list[str] | None = None) -> None:
         cmd_launch_spec(args.id)
     elif args.command == "chromium-pids":
         cmd_chromium_pids(args.user_data)
+    elif args.command == "focus-plan":
+        cmd_focus_plan(args.class_name)
     elif args.command == "fetch-icons":
         cmd_fetch_icons()
     else:

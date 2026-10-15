@@ -48,17 +48,17 @@ omarchy-shell omabox dashboard
 
 | Keys | Action |
 | --- | --- |
-| `Super+Alt+O` | Toggle the `omabox` special workspace |
+| `Super+Shift+O` | Toggle the `omabox` special workspace. This replaces Obsidian |
 | `Super+Alt+1` … `9` | Focus the service whose `key` is that digit, or launch it |
 
-`Super+O` is Omarchy's "Pop window out" bind (`default/hypr/bindings/tiling.lua`). `Super+Shift+O` launches Obsidian while preinstalled binds are enabled (`default/hypr/bindings/applications.lua`). `Super+Alt+O` is unbound in those defaults, so the generated file uses `o.bind` rather than replacing either chord. List what is bound on this machine with `omarchy menu keybindings --print`.
+`Super+O` is Omarchy's "Pop window out" bind (`default/hypr/bindings/tiling.lua`). `Super+Shift+O` launches Obsidian while preinstalled binds are enabled (`default/hypr/bindings/applications.lua`). The generated file uses `o.rebind`, so that chord toggles Omabox and no longer opens Obsidian. List binds with `omarchy menu keybindings --print`.
 
 Those binds live in `~/.config/hypr/omabox.lua`, using the same `o.bind` helper as `~/.config/hypr/bindings.lua` (`code:10` is the key `1`). Digit keys follow the `key` field, not the order in the file. If two services share a key, the earlier one wins and `omabox add` says so.
 
-To use a different toggle chord, edit the `o.bind("SUPER + ALT + O", ...)` line in `~/.config/hypr/omabox.lua`. If that chord is already bound, change `o.bind` to `o.rebind` (same arguments). `o.rebind` removes the previous action first, which is how Omarchy's own manual replaces the Obsidian bind:
+To use a different toggle chord, edit the `o.rebind("SUPER + SHIFT + O", ...)` line in `~/.config/hypr/omabox.lua`. `o.rebind` removes the previous action first. A chord that is already bound, such as Obsidian on `Super+Shift+O`, has to use `o.rebind` rather than `o.bind`.
 
 ```lua
-o.rebind("SUPER + SHIFT + O", "Omabox", "omabox toggle")
+o.rebind("SUPER + ALT + O", "Omabox", "omabox toggle")
 ```
 
 Then validate:
@@ -70,7 +70,9 @@ hyprctl configerrors
 
 `omabox setup`, `omabox add`, and `omabox remove` rewrite `omabox.lua`, so put the custom chord back after those commands.
 
-Click a dock icon to focus or launch. The window rule parks the app on special workspace `omabox` without showing it (`workspace` may end with ` silent` in the [Hyprland window rules](https://wiki.hypr.land/Configuring/Basics/Window-Rules/)). The click waits until Hyprland reports that window, moves it onto `special:omabox`, toggles the special workspace, and focuses it. An empty special workspace does not stay open, which is why toggling it before Chromium maps looks like a click that did nothing. The `+` button opens the dashboard (also `omabox dashboard`, or the menu row "Omabox services").
+Click a dock icon to focus or launch that one service. The window rule parks new apps on special workspace `omabox` without showing it (`workspace` may end with ` silent` in the [Hyprland window rules](https://wiki.hypr.land/Configuring/Basics/Window-Rules/)). The click then leaves only that service on `special:omabox`: other Omabox windows move to `special:omabox-hidden`, a second window of the same class is closed, and the remaining window is focused with `hl.dsp.focus`. An empty special workspace does not stay open, which is why toggling it before Chromium maps looks like a click that did nothing. The `+` button opens the dashboard (also `omabox dashboard`, or the menu row "Omabox services").
+
+If a window of that class is already mapped, `omabox focus` and `omabox launch` show it and do not start Chromium again. A second `--app` launch is what opens another WhatsApp window and the "open in another window" dialog. When none is mapped, Omabox launches once.
 
 Quattro's `hyprctl dispatch` runs Lua, the same shape as Omarchy's scratchpad binds. Keyword dispatchers (`togglespecialworkspace`, `focuswindow`, `movetoworkspacesilent`) fail with `')' expected near 'omabox'`. Omabox calls:
 
