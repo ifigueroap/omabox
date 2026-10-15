@@ -232,6 +232,44 @@ class CliTests(unittest.TestCase):
         self.assertIn("togglespecialworkspace omabox", focus)
         self.assertIn("focuswindow class:", focus)
 
+    def test_launch_shows_workspace_after_window_exists(self) -> None:
+        bindir = self.home / "bin"
+        bindir.mkdir()
+        hypr_log = self.home / "hypr.log"
+        launch_log = self.home / "launch.log"
+        (bindir / "hyprctl").write_text(
+            "#!/bin/bash\n"
+            'printf "%s\\n" "$*" >> "$OMABOX_HYPR_LOG"\n'
+            'if [[ $1 == -j && $2 == clients ]]; then\n'
+            '  printf "%s\\n" \'[{"class":"chrome-web.whatsapp.com__-WhatsApp"}]\'\n'
+            'elif [[ $1 == -j && $2 == monitors ]]; then\n'
+            '  printf "%s\\n" \'[{"specialWorkspace":{"name":""}}]\'\n'
+            "fi\n"
+            "exit 0\n",
+            encoding="utf-8",
+        )
+        (bindir / "uwsm-app").write_text(
+            "#!/bin/bash\n"
+            'printf "%s\\n" "$*" >> "$OMABOX_LAUNCH_LOG"\n'
+            "exit 0\n",
+            encoding="utf-8",
+        )
+        (bindir / "chromium").write_text("#!/bin/bash\nexit 0\n", encoding="utf-8")
+        for name in ("hyprctl", "uwsm-app", "chromium"):
+            (bindir / name).chmod(0o755)
+        env = self.env.copy()
+        env["PATH"] = f"{bindir}:/usr/bin:/bin"
+        env["OMABOX_HYPR_LOG"] = str(hypr_log)
+        env["OMABOX_LAUNCH_LOG"] = str(launch_log)
+        subprocess.check_call([str(ROOT / "bin" / "omabox"), "launch", "whatsapp"], env=env)
+        launched = launch_log.read_text(encoding="utf-8")
+        self.assertIn("--user-data-dir=", launched)
+        self.assertIn("--profile-directory=WhatsApp", launched)
+        self.assertIn("--app=https://web.whatsapp.com/", launched)
+        hypr = hypr_log.read_text(encoding="utf-8")
+        self.assertLess(hypr.index("-j clients"), hypr.index("dispatch togglespecialworkspace omabox"))
+        self.assertIn("dispatch focuswindow class:", hypr)
+
     def test_list_and_class(self) -> None:
         listed = self.run_cli("list")
         self.assertIn("whatsapp", listed)

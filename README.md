@@ -51,7 +51,12 @@ omarchy-shell omabox dashboard
 
 Those binds live in the generated Lua, using the same `o.bind` helper as `~/.config/hypr/bindings.lua` and `default/hypr/bindings/tiling.lua` (`code:10` is the key `1`). Digit keys follow the `key` field, not the order in the file. If two services share a key, the earlier one wins and `omabox add` says so.
 
-Click a dock icon to focus or launch. The `+` button opens the dashboard (also `omabox dashboard`, or the menu row "Omabox services").
+Click a dock icon to focus or launch. The window rule parks the app on special workspace `omabox` without showing it, so the click waits until Hyprland reports that window and only then opens the workspace. An empty special workspace does not stay open, which is why toggling it before Chromium maps looks like a click that did nothing. The `+` button opens the dashboard (also `omabox dashboard`, or the menu row "Omabox services").
+
+```bash
+omabox launch whatsapp --print   # browser and flags, no window
+omabox launch whatsapp           # start it and show the omabox workspace
+```
 
 ## Config
 
