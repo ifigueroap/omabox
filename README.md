@@ -30,7 +30,17 @@ omarchy plugin add https://github.com/ifigueroap/omabox --enable --yes
 
 Skip the menu row with `omabox setup` and no `--menu`. Enable the plugin later with `omarchy plugin enable omabox`.
 
-The dock is a layer-shell panel on the right edge. It appears when the plugin is enabled and `omarchy-shell` is running. Theme colors come from `qs.Commons` `Color` and `Style`, which the shell updates when the theme changes (`docs/omarchy-shell.md`, `docs/theming.md`).
+The dock is a layer-shell panel on the right edge of the screen, a vertical pill of service icons plus a `+` button. It appears when the plugin is enabled and the shell has loaded `Panel.qml`. Theme colors come from `qs.Commons` `Color` and `Style`, which the shell updates when the theme changes (`docs/omarchy-shell.md`, `docs/theming.md`).
+
+After a later `git pull` in the plugin checkout, restart the shell so it loads the new QML. Saving a file under `~/.config/omarchy/plugins/` also reloads plugin code; a type error on the previous load still needs a restart:
+
+```bash
+git -C ~/.config/omarchy/plugins/omabox pull
+omarchy restart shell
+omarchy-shell omabox dashboard
+```
+
+`omabox dashboard` prints `ok` and opens the service dashboard when the panel is mounted. `Target not found.` means `Panel.qml` did not load, so no `omabox` IPC target was registered. `omarchy-restart-shell` is the same restart.
 
 ## Keys
 
@@ -122,7 +132,7 @@ Checked against `basecamp/omarchy` branch `quattro` (the default branch):
 - Manifest: `docs/omarchy-shell.md`, `manual/32-shell-plugins.md`, `bin/omarchy-plugin-validate`, `shell/services/PluginRegistry.qml`
 - Enablement: third-party plugins turn on by appearing in `plugins[]` (`omarchy plugin enable`). `shell.json` has no per-plugin config object
 - Loading: `keepLoaded` panels mount at startup in `shell/shell.qml`; entry points are `Item`s and receive `omarchyPath`, `shell`, `manifest`
-- IPC: `shell/Commons/ShellIpc.qml` target `omabox` (`dashboard`, `reload`)
+- IPC: target `omabox` (`dashboard`, `reload`). First-party code uses the `ShellIpc` type from `shell/Commons/ShellIpc.qml`. That type is not visible to a file loaded from `~/.config/omarchy/plugins/`, so Omabox uses `IpcHandler` (`Quickshell.Io`) plus the `IpcRegistry` singleton, which is what `ShellIpc.qml` does internally. `Style`, `Util`, and `Color` are singletons and stay available.
 - Colors: `import qs.Commons as Commons` and `Commons.Color` / `Style` (`docs/omarchy-shell.md`, `shell/Commons/Color.qml`, `docs/theming.md`)
 - Menu rows: `docs/menu.md`, `~/.config/omarchy/extensions/omarchy-menu.jsonc`
 - Hyprland: `o.bind` / `o.window` from `default/hypr/helpers.lua`, user binds in `~/.config/hypr/bindings.lua`, module path in `default/hypr/bootstrap.lua`

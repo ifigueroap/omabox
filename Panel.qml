@@ -174,8 +174,19 @@ Item {
     syncToplevels()
   }
 
-  ShellIpc {
+  // ShellIpc is a non-singleton type in qs.Commons. Quickshell exposes those
+  // types only inside the shell config tree, so a third-party Panel.qml fails
+  // with "ShellIpc is not a type" and never mounts (no dock, and
+  // `omarchy-shell omabox dashboard` answers "Target not found.").
+  // IpcHandler is Quickshell.Io. IpcRegistry is a Commons singleton, same as
+  // Style, Util, and Color, which do resolve from a plugin directory.
+  // shell/Commons/ShellIpc.qml is this same pair.
+  IpcHandler {
+    id: ipc
     target: "omabox"
+
+    Component.onCompleted: Commons.IpcRegistry.register(ipc)
+    Component.onDestruction: Commons.IpcRegistry.unregister(ipc)
 
     function dashboard(): string {
       root.open("{}")
