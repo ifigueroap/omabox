@@ -20,6 +20,8 @@ Item {
   property var services: []
   property var windows: ({})
   property string dockMode: "always"
+  property string dockEdge: "right"
+  property bool dockPinned: false
   property bool omaboxActive: false
   property var lastArgs: []
 
@@ -61,6 +63,10 @@ Item {
       root.services = data && data.services ? data.services : []
       if (data && (data.dock === "always" || data.dock === "special-only"))
         root.dockMode = data.dock
+      if (data && (data.edge === "left" || data.edge === "right" || data.edge === "top" || data.edge === "bottom"))
+        root.dockEdge = data.edge
+      if (data && (data.pinned === true || data.pinned === false))
+        root.dockPinned = data.pinned
     } catch (error) {
       console.warn("omabox: service list is not JSON")
     }
