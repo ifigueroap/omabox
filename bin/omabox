@@ -290,8 +290,10 @@ Usage: omabox <command> [args]
   dashboard                    Open the dock's service dashboard
   setup [--menu]               Install keybinds, window rules, and ~/.local/bin/omabox
   uninstall [--purge]          Remove those integrations
-  config [dock always|special-only]
-                               Show or set dock visibility
+  config                       Show dock, edge, and pinned
+  config dock always|special-only
+  config edge left|right|top|bottom
+  config pinned true|false    Show or set one dock setting
   fetch-icons                  Cache favicons for services without a bundled icon
   class <url> <profile>        Print the Chromium window class
 

@@ -30,9 +30,9 @@ omarchy plugin add https://github.com/ifigueroap/omabox --enable --yes
 
 Skip the menu row with `omabox setup` and no `--menu`. Enable the plugin later with `omarchy plugin enable omabox`.
 
-The dock is a layer-shell panel on the right edge of the screen, a vertical pill of service icons plus a `+` button. It appears when the plugin is enabled and the shell has loaded `Panel.qml`. Theme colors come from `qs.Commons` `Color` and `Style`, which the shell updates when the theme changes (`docs/omarchy-shell.md`, `docs/theming.md`).
+The dock is a layer-shell panel, a pill of service icons plus a `+` button. The default edge is the right side, a vertical pill. `edge = "left"` stays vertical. `top` and `bottom` lay the icons in one horizontal row. It appears when the plugin is enabled and the shell has loaded `Panel.qml`. Theme colors come from `qs.Commons` `Color` and `Style`, which the shell updates when the theme changes (`docs/omarchy-shell.md`, `docs/theming.md`).
 
-On a regular workspace the dock stays a short notch on that edge. Moving the pointer onto the notch expands the full pill; leaving it collapses the notch again after 400ms. On special workspace `omabox` the pill stays open and reserves its width. Set `dock = "special-only"` to hide the notch everywhere except that workspace. The default is `always`.
+On a regular workspace the dock stays a short notch on that edge, drawn at 35% opacity until the pointer is over it. Moving the pointer onto the notch expands the full pill and brings it to full opacity; leaving it fades the dock and collapses the notch again after 400ms. On special workspace `omabox` the pill stays open, opaque, and reserves its thickness. `pinned = true` keeps that full opaque pill on regular workspaces too. It does not override `dock = "special-only"`, which still hides the dock everywhere except that workspace. The defaults are `dock = "always"`, `edge = "right"`, and `pinned = false`.
 
 A bar button on the right of the Omarchy bar runs `omabox toggle`, the same action as `Super+Shift+O`. It is a `bar-widget` (`BarWidget.qml`, `defaultSection: "right"`), not a tray-drawer entry, so it stays visible without opening the tray (`docs/omarchy-shell.md`). The widget is a plain `Item` with `triggerPress`: `qs.Ui.BarWidget` and `qs.Ui.WidgetButton` are types the shell does not expose to `~/.config/omarchy/plugins/`.
 
@@ -49,8 +49,8 @@ After a later `git pull` in the plugin checkout, restart the shell so it loads n
 
 ```bash
 git -C ~/.config/omarchy/plugins/omabox fetch origin
-git -C ~/.config/omarchy/plugins/omabox checkout cursor/omabox-hyprctl-34c0
-git -C ~/.config/omarchy/plugins/omabox pull origin cursor/omabox-hyprctl-34c0
+git -C ~/.config/omarchy/plugins/omabox checkout cursor/omabox-dock-layout-34c0
+git -C ~/.config/omarchy/plugins/omabox pull origin cursor/omabox-dock-layout-34c0
 ~/.config/omarchy/plugins/omabox/bin/omabox setup
 hyprctl configerrors
 omarchy restart shell
@@ -60,7 +60,7 @@ omarchy-shell omabox dashboard
 omabox config
 ```
 
-`omabox dashboard` prints `ok` and opens the service dashboard when the panel is mounted. `Target not found.` means `Panel.qml` did not load, so no `omabox` IPC target was registered. `omarchy-restart-shell` is the same restart. A CLI-only change (launch, focus, toggle) is picked up through the `~/.local/bin/omabox` symlink without a shell restart. `omabox config` prints `dock=always` until you change it.
+`omabox dashboard` prints `ok` and opens the service dashboard when the panel is mounted. `Target not found.` means `Panel.qml` did not load, so no `omabox` IPC target was registered. `omarchy-restart-shell` is the same restart. A CLI-only change (launch, focus, toggle) is picked up through the `~/.local/bin/omabox` symlink without a shell restart. `omabox config` prints `dock=always`, `edge=right`, and `pinned=false` until you change them.
 
 ## Keys
 
@@ -148,21 +148,28 @@ Dock visibility is a separate file, `~/.config/omabox/config.toml`, so rewriting
 
 ```toml
 dock = "always"
+edge = "right"
+pinned = false
 ```
 
-| Value | Dock |
-| --- | --- |
-| `always` | Notch on regular workspaces; full pill on `special:omabox` and while the pointer is over the notch. Default |
-| `special-only` | Full pill only while `special:omabox` is the active workspace. No notch elsewhere |
+| Key | Values | Meaning |
+| --- | --- | --- |
+| `dock` | `always` (default), `special-only` | `always`: notch on regular workspaces, full pill on `special:omabox` and while the pointer is over the notch. `special-only`: full pill only while `special:omabox` is active |
+| `edge` | `left`, `right` (default), `top`, `bottom` | Which screen edge holds the dock. Left and right are a vertical pill. Top and bottom are a horizontal row |
+| `pinned` | `true`, `false` (default) | `true` keeps the pill fully open and opaque. `false` is the notch that expands on hover. Pin does not show the dock on other workspaces when `dock` is `special-only` |
+
+While the pointer is off the dock, and the dock is neither pinned nor held open by `special:omabox`, the notch is drawn at 35% opacity using the same `Color` and `Style` values. Hover, pin, and that workspace use opacity 1.
 
 ```bash
-omabox config                         # dock=always
+omabox config                         # dock=always / edge=right / pinned=false
 omabox config dock                    # always
 omabox config dock special-only
-omabox config dock always
+omabox config edge bottom
+omabox config pinned true
+omabox config pinned false
 ```
 
-`omabox list --json` includes the same value as `"dock"`. The dashboard has Always and Workspace only chips, which call `omabox config dock …`. An unknown value is rejected. A missing or unreadable file is treated as `always`. `omabox config dock` rewrites the whole file as that one key. `omabox uninstall --purge` deletes `~/.config/omabox`, including `config.toml`.
+`omabox list --json` includes `"dock"`, `"edge"`, and `"pinned"`. The dashboard chips call `omabox config dock`, `omabox config edge`, and `omabox config pinned`. An unknown value is rejected. A missing or unreadable file uses the defaults above. Saving one key rewrites `config.toml` with all three keys and keeps any other flat string, boolean, or integer keys already in the file. `omabox uninstall --purge` deletes `~/.config/omabox`, including `config.toml`.
 
 ## How windows are launched and matched
 
@@ -223,7 +230,7 @@ WhatsApp, Discord, Zulip, Telegram, Claude, and the X mark used for Grok Bot are
 - A URL whose path is not `/` does not get a double underscore. Discord is `chrome-discord.com__app-Discord`. The dock computes the class from the URL; it does not assume every service is `__`.
 - Zulip does nothing until it has an `https` URL.
 - `unread` only sees titles Chromium puts on the window. Sites that show a count only inside the page stay at the urgent-dot fallback.
-- The dashboard edits services by shelling out to `omabox`. It does not edit the TOML file from QML. Dock mode uses the same path (`omabox config dock …`).
+- The dashboard edits services by shelling out to `omabox`. It does not edit the TOML file from QML. Dock mode, edge, and pin use the same path (`omabox config …`).
 - Whether `special:omabox` is showing is read from `Hyprland.focusedWorkspace` and the focused monitor's `specialWorkspace` / `activeWorkspace` names. A compositor that reports the special workspace under a different field would leave the notch up while Omabox is open.
 - `fetch-icons` uses Google's favicon service and accepts only a PNG response.
 
@@ -233,7 +240,7 @@ This repo's CI runs shellcheck, qmllint (syntax only; Quickshell is not installe
 
 Not run, because there is no Omarchy desktop here:
 
-- Quickshell loading the panel or the bar widget, live theme updates, layer-shell anchors, notch hover, or `ShellIpc`
+- Quickshell loading the panel or the bar widget, live theme updates, layer-shell anchors on each edge, notch hover, idle opacity, or `ShellIpc`
 - A real Chromium `--app` window and its Hyprland `class`
 - `windowtitlev2` / `urgent` delivery into the badge
 - `hyprctl dispatch` or `hyprctl reload` against a running compositor (tests check the Lua strings with a fake `hyprctl`)

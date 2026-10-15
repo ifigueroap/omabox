@@ -61,10 +61,20 @@ function normAddress(value) {
 
 // Dock shape on screen. `latched` stays true briefly after the pointer leaves
 // so the expanded dock does not collapse between the notch and an icon.
-function dockPresentation(mode, onOmabox, latched) {
-  if (mode === "special-only") return onOmabox ? "full" : "hidden"
-  if (onOmabox || latched) return "full"
+// `pinned` keeps the pill open. special-only still hides the dock off omabox.
+function dockPresentation(mode, onOmabox, latched, pinned) {
+  if (mode === "special-only" && !onOmabox) return "hidden"
+  if (onOmabox || latched || pinned) return "full"
   return "notch"
+}
+
+// Idle notch (and the brief expanded tail after the pointer leaves) is faded.
+// Hover, pin, and the omabox workspace use the theme colors at full strength.
+var DOCK_IDLE_OPACITY = 0.35
+
+function dockOpacity(pointerInside, pinned, onOmabox) {
+  if (pointerInside || pinned || onOmabox) return 1
+  return DOCK_IDLE_OPACITY
 }
 
 // Hyprland windowtitlev2 payload is "ADDRESS,title" and the title may contain commas.
@@ -83,6 +93,8 @@ if (typeof module === "object" && module.exports) {
     unreadCount: unreadCount,
     normAddress: normAddress,
     dockPresentation: dockPresentation,
+    dockOpacity: dockOpacity,
+    DOCK_IDLE_OPACITY: DOCK_IDLE_OPACITY,
     eventTitle: eventTitle
   }
 }

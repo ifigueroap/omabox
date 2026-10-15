@@ -54,45 +54,119 @@ def config_file() -> Path:
 
 
 DOCK_MODES = ("always", "special-only")
+DOCK_EDGES = ("left", "right", "top", "bottom")
+_SETTING_ORDER = ("dock", "edge", "pinned")
 
 
 def settings_file() -> Path:
     return config_dir() / "config.toml"
 
 
-def load_dock_mode() -> str:
+def _read_settings_raw() -> dict:
     path = settings_file()
     if not path.is_file():
-        return "always"
+        return {}
     try:
         data = tomllib.loads(path.read_text(encoding="utf-8"))
     except tomllib.TOMLDecodeError:
-        return "always"
-    mode = data.get("dock")
-    if isinstance(mode, str) and mode in DOCK_MODES:
-        return mode
-    return "always"
+        return {}
+    return data if isinstance(data, dict) else {}
 
 
-def write_dock_mode(mode: str) -> None:
-    if mode not in DOCK_MODES:
-        die("dock must be 'always' or 'special-only'")
+def normalized_settings(raw: dict | None = None) -> dict[str, object]:
+    source = _read_settings_raw() if raw is None else raw
+    dock = source.get("dock")
+    edge = source.get("edge")
+    pinned = source.get("pinned")
+    return {
+        "dock": dock if isinstance(dock, str) and dock in DOCK_MODES else "always",
+        "edge": edge if isinstance(edge, str) and edge in DOCK_EDGES else "right",
+        "pinned": pinned if isinstance(pinned, bool) else False,
+    }
+
+
+def load_dock_mode() -> str:
+    return str(normalized_settings()["dock"])
+
+
+def _toml_scalar(value: object) -> str | None:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, str):
+        escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+        return f'"{escaped}"'
+    if isinstance(value, int):
+        return str(value)
+    return None
+
+
+def _toml_key(key: str) -> bool:
+    return re.fullmatch(r"[A-Za-z_][A-Za-z0-9_-]*", key) is not None
+
+
+def save_settings(updates: dict) -> None:
+    raw = _read_settings_raw()
+    current = normalized_settings(raw)
+    current.update(updates)
+    raw["dock"] = current["dock"]
+    raw["edge"] = current["edge"]
+    raw["pinned"] = current["pinned"]
+    lines: list[str] = []
+    written: set[str] = set()
+    for key in _SETTING_ORDER:
+        rendered = _toml_scalar(raw.get(key))
+        if rendered is None:
+            continue
+        lines.append(f"{key} = {rendered}")
+        written.add(key)
+    for key, value in raw.items():
+        if not isinstance(key, str) or key in written or not _toml_key(key):
+            continue
+        rendered = _toml_scalar(value)
+        if rendered is None:
+            continue
+        lines.append(f"{key} = {rendered}")
     path = settings_file()
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(f'dock = "{mode}"\n', encoding="utf-8")
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def cmd_config(key: str = "", value: str = "") -> None:
+    settings = normalized_settings()
     if not key:
-        print(f"dock={load_dock_mode()}")
+        pinned = "true" if settings["pinned"] else "false"
+        print(f"dock={settings['dock']}")
+        print(f"edge={settings['edge']}")
+        print(f"pinned={pinned}")
         return
-    if key != "dock":
-        die(f"unknown setting '{key}'")
-    if not value:
-        print(load_dock_mode())
+    if key == "dock":
+        if not value:
+            print(settings["dock"])
+            return
+        if value not in DOCK_MODES:
+            die("dock must be 'always' or 'special-only'")
+        save_settings({"dock": value})
+        print(value)
         return
-    write_dock_mode(value)
-    print(value)
+    if key == "edge":
+        if not value:
+            print(settings["edge"])
+            return
+        if value not in DOCK_EDGES:
+            die("edge must be 'left', 'right', 'top', or 'bottom'")
+        save_settings({"edge": value})
+        print(value)
+        return
+    if key == "pinned":
+        if not value:
+            print("true" if settings["pinned"] else "false")
+            return
+        if value not in ("true", "false"):
+            die("pinned must be 'true' or 'false'")
+        save_settings({"pinned": value == "true"})
+        print(value)
+        return
+    die(f"unknown setting '{key}'")
 
 
 def data_dir() -> Path:
@@ -518,7 +592,16 @@ def cmd_init(force: bool = False, announce: bool = True) -> None:
 def cmd_list(as_json: bool) -> None:
     services = [public_service(service) for service in load_services()]
     if as_json:
-        json.dump({"services": services, "dock": load_dock_mode()}, sys.stdout)
+        settings = normalized_settings()
+        json.dump(
+            {
+                "services": services,
+                "dock": settings["dock"],
+                "edge": settings["edge"],
+                "pinned": settings["pinned"],
+            },
+            sys.stdout,
+        )
         sys.stdout.write("\n")
         return
     if not services:

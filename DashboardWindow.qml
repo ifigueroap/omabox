@@ -41,6 +41,16 @@ PanelWindow {
     { "mode": "always", "label": "Always" },
     { "mode": "special-only", "label": "Workspace only" }
   ]
+  readonly property var edgeChoices: [
+    { "edge": "left", "label": "Left" },
+    { "edge": "right", "label": "Right" },
+    { "edge": "top", "label": "Top" },
+    { "edge": "bottom", "label": "Bottom" }
+  ]
+  readonly property var pinChoices: [
+    { "value": "false", "label": "Notch" },
+    { "value": "true", "label": "Pinned" }
+  ]
 
   function fillPreset(service) {
     formId = service.id
@@ -107,7 +117,7 @@ PanelWindow {
         Layout.fillWidth: true
         wrapMode: Text.WordWrap
         textFormat: Text.PlainText
-        text: "Services share one Chromium (--user-data-dir) and keep a profile each. Super+Shift+O toggles the workspace. The bar icon does the same."
+        text: "Services share one Chromium (--user-data-dir) and keep a profile each. Super+Shift+O toggles the workspace. The bar icon does the same. Pin keeps the pill open. The edge chips move the dock."
         color: Commons.Color.muted
         font.family: Style.font.family
         font.pixelSize: Style.font.bodySmall
@@ -150,6 +160,93 @@ PanelWindow {
               onClicked: {
                 if (!dashboard.host) return
                 dashboard.host.run(["config", "dock", modelData.mode])
+              }
+            }
+          }
+        }
+      }
+
+      RowLayout {
+        Layout.fillWidth: true
+        spacing: Style.spacing.xs
+        Text {
+          textFormat: Text.PlainText
+          text: "Edge"
+          color: Commons.Color.popups.text
+          font.family: Style.font.family
+          font.pixelSize: Style.font.body
+        }
+        Repeater {
+          model: dashboard.edgeChoices
+          delegate: Rectangle {
+            required property var modelData
+            readonly property bool selected: dashboard.host && dashboard.host.dockEdge === modelData.edge
+            Layout.preferredHeight: Style.spacing.controlHeight
+            Layout.preferredWidth: edgeLabel.implicitWidth + Style.spacing.controlPaddingX * 2
+            radius: Style.space(6)
+            color: selected ? Commons.Color.menu.selectedBackground : "transparent"
+            border.color: Commons.Color.popups.border
+            border.width: Style.normalBorderWidth
+
+            Text {
+              id: edgeLabel
+              anchors.centerIn: parent
+              textFormat: Text.PlainText
+              text: modelData.label
+              color: Commons.Color.popups.text
+              font.family: Style.font.family
+              font.pixelSize: Style.font.bodySmall
+            }
+
+            MouseArea {
+              anchors.fill: parent
+              onClicked: {
+                if (!dashboard.host) return
+                dashboard.host.run(["config", "edge", modelData.edge])
+              }
+            }
+          }
+        }
+      }
+
+      RowLayout {
+        Layout.fillWidth: true
+        spacing: Style.spacing.xs
+        Text {
+          textFormat: Text.PlainText
+          text: "Open"
+          color: Commons.Color.popups.text
+          font.family: Style.font.family
+          font.pixelSize: Style.font.body
+        }
+        Repeater {
+          model: dashboard.pinChoices
+          delegate: Rectangle {
+            required property var modelData
+            readonly property string pinValue: dashboard.host && dashboard.host.dockPinned ? "true" : "false"
+            readonly property bool selected: pinValue === modelData.value
+            Layout.preferredHeight: Style.spacing.controlHeight
+            Layout.preferredWidth: pinLabel.implicitWidth + Style.spacing.controlPaddingX * 2
+            radius: Style.space(6)
+            color: selected ? Commons.Color.menu.selectedBackground : "transparent"
+            border.color: Commons.Color.popups.border
+            border.width: Style.normalBorderWidth
+
+            Text {
+              id: pinLabel
+              anchors.centerIn: parent
+              textFormat: Text.PlainText
+              text: modelData.label
+              color: Commons.Color.popups.text
+              font.family: Style.font.family
+              font.pixelSize: Style.font.bodySmall
+            }
+
+            MouseArea {
+              anchors.fill: parent
+              onClicked: {
+                if (!dashboard.host) return
+                dashboard.host.run(["config", "pinned", modelData.value])
               }
             }
           }

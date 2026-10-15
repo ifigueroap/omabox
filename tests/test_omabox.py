@@ -173,6 +173,8 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(zulip["class"], "")
         self.assertFalse(zulip["ready"])
         self.assertEqual(payload["dock"], "always")
+        self.assertEqual(payload["edge"], "right")
+        self.assertIs(payload["pinned"], False)
 
     def test_launch_spec(self) -> None:
         omabox.cmd_init()
@@ -222,16 +224,49 @@ class ConfigTests(unittest.TestCase):
 
     def test_dock_mode_roundtrip(self) -> None:
         self.assertEqual(omabox.load_dock_mode(), "always")
+        self.assertEqual(omabox.normalized_settings()["edge"], "right")
+        self.assertIs(omabox.normalized_settings()["pinned"], False)
         omabox.cmd_config("dock", "special-only")
-        self.assertEqual(omabox.settings_file().read_text(encoding="utf-8").strip(), 'dock = "special-only"')
+        text = omabox.settings_file().read_text(encoding="utf-8")
+        self.assertIn('dock = "special-only"', text)
+        self.assertIn('edge = "right"', text)
+        self.assertIn("pinned = false", text)
         self.assertEqual(omabox.load_dock_mode(), "special-only")
+        omabox.cmd_config("edge", "top")
+        omabox.cmd_config("pinned", "true")
+        omabox.cmd_config("dock", "always")
+        text = omabox.settings_file().read_text(encoding="utf-8")
+        self.assertIn('dock = "always"', text)
+        self.assertIn('edge = "top"', text)
+        self.assertIn("pinned = true", text)
+        self.assertEqual(omabox.normalized_settings()["edge"], "top")
+        self.assertIs(omabox.normalized_settings()["pinned"], True)
         listed = json.loads(subprocess.check_output(
             [sys.executable, str(ROOT / "lib" / "omabox.py"), "list", "--json"],
             text=True,
         ))
-        self.assertEqual(listed["dock"], "special-only")
+        self.assertEqual(listed["dock"], "always")
+        self.assertEqual(listed["edge"], "top")
+        self.assertIs(listed["pinned"], True)
+        shown = subprocess.check_output(
+            [sys.executable, str(ROOT / "lib" / "omabox.py"), "config"],
+            text=True,
+        )
+        self.assertIn("dock=always", shown)
+        self.assertIn("edge=top", shown)
+        self.assertIn("pinned=true", shown)
+        omabox.settings_file().write_text('dock = "special-only"\nnote = "keep"\n', encoding="utf-8")
+        omabox.cmd_config("edge", "bottom")
+        kept = omabox.settings_file().read_text(encoding="utf-8")
+        self.assertIn('dock = "special-only"', kept)
+        self.assertIn('edge = "bottom"', kept)
+        self.assertIn('note = "keep"', kept)
         with self.assertRaises(SystemExit):
             omabox.cmd_config("dock", "sometimes")
+        with self.assertRaises(SystemExit):
+            omabox.cmd_config("edge", "middle")
+        with self.assertRaises(SystemExit):
+            omabox.cmd_config("pinned", "yes")
         with self.assertRaises(SystemExit):
             omabox.cmd_config("theme", "dark")
 
