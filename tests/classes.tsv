@@ -1,0 +1,11 @@
+https://web.whatsapp.com/	WhatsApp	chrome-web.whatsapp.com__-WhatsApp
+https://app.slack.com/	Slack	chrome-app.slack.com__-Slack
+https://discord.com/app	Discord	chrome-discord.com__app-Discord
+https://web.telegram.org/a/	Telegram	chrome-web.telegram.org__a_-Telegram
+https://grok.com/	Grok	chrome-grok.com__-Grok
+https://chatgpt.com/	ChatGPT	chrome-chatgpt.com__-ChatGPT
+https://claude.ai/	Claude	chrome-claude.ai__-Claude
+https://x.com/i/grok	GrokBot	chrome-x.com__i_grok-GrokBot
+https://example.com:8443/foo/bar	Profile 1	chrome-example.com__foo_bar-Profile_1
+https://user:pass@app.slack.com/client	Slack	chrome-app.slack.com__client-Slack
+https://web.whatsapp.com/	Default	chrome-web.whatsapp.com__-Default

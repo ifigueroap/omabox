@@ -1,0 +1,85 @@
+# Default Omabox services. `omabox init` copies this to
+# ~/.config/omabox/services.toml when that file does not exist yet.
+# Zulip has no public URL of its own; set one with:
+#   omabox add zulip --url https://your-org.zulipchat.com --update
+
+[[service]]
+id = "whatsapp"
+name = "WhatsApp"
+url = "https://web.whatsapp.com/"
+icon = ""
+profile = "WhatsApp"
+key = "1"
+unread = "^\\((\\d+)\\)"
+
+[[service]]
+id = "slack"
+name = "Slack"
+url = "https://app.slack.com/"
+icon = ""
+profile = "Slack"
+key = "2"
+unread = "^\\((\\d+)\\)"
+
+[[service]]
+id = "discord"
+name = "Discord"
+url = "https://discord.com/app"
+icon = ""
+profile = "Discord"
+key = "3"
+unread = "^\\((\\d+)\\)"
+
+[[service]]
+id = "zulip"
+name = "Zulip"
+url = ""
+icon = ""
+profile = "Zulip"
+key = "4"
+unread = "^\\((\\d+)\\)"
+
+[[service]]
+id = "telegram"
+name = "Telegram"
+url = "https://web.telegram.org/a/"
+icon = ""
+profile = "Telegram"
+key = "5"
+unread = "^\\((\\d+)\\)"
+
+[[service]]
+id = "grok"
+name = "Grok"
+url = "https://grok.com/"
+icon = ""
+profile = "Grok"
+key = "6"
+unread = "^\\((\\d+)\\)"
+
+[[service]]
+id = "chatgpt"
+name = "ChatGPT"
+url = "https://chatgpt.com/"
+icon = ""
+profile = "ChatGPT"
+key = "7"
+unread = "^\\((\\d+)\\)"
+
+[[service]]
+id = "claude"
+name = "Claude"
+url = "https://claude.ai/"
+icon = ""
+profile = "Claude"
+key = "8"
+unread = "^\\((\\d+)\\)"
+
+[[service]]
+id = "grok-bot"
+name = "Grok Bot"
+url = "https://x.com/i/grok"
+icon = ""
+profile = "GrokBot"
+key = "9"
+unread = "^\\((\\d+)\\)"
