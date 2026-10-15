@@ -22,10 +22,16 @@ Item {
 
   readonly property string home: Quickshell.env("HOME")
   readonly property string configPath: home + "/.config/omabox/services.toml"
+  // __sourceDir is the absolute plugin checkout. The shell keeps it on the
+  // manifest specifically so third-party plugins can find their own files.
+  // Qt.resolvedUrl is the fallback before that injection, and for a Loader
+  // whose document URL is Panel.qml.
   readonly property string cliPath: {
+    var dir = manifest && manifest.__sourceDir ? String(manifest.__sourceDir) : ""
+    if (dir.length > 0) return dir.replace(/\/$/, "") + "/bin/omabox"
     var url = Qt.resolvedUrl("bin/omabox").toString()
     if (url.indexOf("file://") === 0)
-      url = decodeURIComponent(url.slice("file://".length))
+      url = decodeURIComponent(url.replace(/^file:\/\//, ""))
     return url
   }
 
@@ -124,10 +130,22 @@ Item {
     }
   }
 
+  // Same Process path as `omabox list`, which is what fills the dock.
+  // Util.execArgv goes through `bash -lc` and drops stderr, so a failed
+  // launch looked like a click that did nothing.
   function run(args) {
+    if (!root.cliPath) {
+      console.warn("omabox: cli path is empty")
+      return
+    }
+    if (launchProc.running) {
+      console.warn("omabox: still launching; click again in a moment")
+      return
+    }
     var argv = [root.cliPath]
     for (var i = 0; i < args.length; i++) argv.push(String(args[i]))
-    Util.execArgv(argv)
+    launchProc.command = argv
+    launchProc.running = true
   }
 
   Timer {
@@ -158,6 +176,19 @@ Item {
     command: [root.cliPath, "list", "--json"]
     stdout: StdioCollector {
       onStreamFinished: root.applyList(text)
+    }
+  }
+
+  Process {
+    id: launchProc
+    stdout: StdioCollector {
+      onStreamFinished: if (String(text || "").trim()) console.log("omabox: " + String(text).trim())
+    }
+    stderr: StdioCollector {
+      onStreamFinished: if (String(text || "").trim()) console.warn("omabox: " + String(text).trim())
+    }
+    onExited: function(exitCode) {
+      if (exitCode !== 0) console.warn("omabox: launch exited " + exitCode)
     }
   }
 

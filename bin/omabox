@@ -79,11 +79,33 @@ print_launch() {
 run_launch() {
   local browser=$1
   shift
+  # setsid detaches the browser from this script. The script then waits for
+  # the window; the browser must outlive that wait.
   if have uwsm-app; then
     setsid uwsm-app -- "$browser" "$@" >/dev/null 2>&1 &
   else
     setsid "$browser" "$@" >/dev/null 2>&1 &
   fi
+}
+
+# Window rules use "special:omabox silent", so Chromium maps onto a hidden
+# workspace. Toggling that workspace before the window exists does not stick
+# (an empty special workspace closes), and the app then stays invisible.
+# Wait until Hyprland reports the class, then show and focus it.
+wait_and_show() {
+  local class_name=$1 regex=$2
+  local i
+  for (( i = 0; i < 80; i++ )); do
+    if window_open "$class_name"; then
+      show_special || true
+      hyprctl dispatch focuswindow "class:$regex" >/dev/null || true
+      return 0
+    fi
+    sleep 0.25
+  done
+  echo "omabox: no window appeared for class ${class_name}" >&2
+  echo "omabox: try: omabox launch --print  and  omabox launch" >&2
+  return 1
 }
 
 special_shown() {
@@ -144,13 +166,17 @@ cmd_launch() {
   while IFS= read -r arg; do
     args+=("$arg")
   done < <(python3 -c 'import json,sys; print("\n".join(json.load(sys.stdin)["args"]))' <<<"$spec")
+  local class_name regex
+  class_name=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["class"])' <<<"$spec")
+  regex=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["classRegex"])' <<<"$spec")
   if (( print )); then
     print_launch "$browser" "${args[@]}"
     return
   fi
+  echo "omabox: launching ${ident}" >&2
   run_launch "$browser" "${args[@]}"
   if have hyprctl; then
-    show_special || true
+    wait_and_show "$class_name" "$regex"
   fi
 }
 
