@@ -1,0 +1,247 @@
+#!/usr/bin/env bash
+# omabox — Rambox-like web apps for Omarchy.
+# Config, window class, and Hyprland snippets live in lib/omabox.py.
+# This script launches Chromium and talks to Hyprland.
+
+set -euo pipefail
+
+SOURCE=$(readlink -f "$0")
+ROOT=$(CDPATH= cd -- "$(dirname "$SOURCE")/.." && pwd)
+LIB="$ROOT/lib/omabox.py"
+
+die() {
+  echo "omabox: $*" >&2
+  exit 1
+}
+
+python() {
+  command python3 "$LIB" "$@"
+}
+
+have() {
+  command -v "$1" >/dev/null 2>&1
+}
+
+# Same browser choice as Omarchy's bin/omarchy-launch-webapp. Omabox does not
+# call omarchy-cmd-browser-handoff: that would open the URL in the default
+# profile instead of the shared Omabox user-data-dir.
+resolve_browser() {
+  local require_bin=${1:-1}
+  local browser="" desktop="" candidate=""
+  if have omarchy-cmd-default-browser; then
+    browser=$(omarchy-cmd-default-browser || true)
+  fi
+  case $browser in
+    google-chrome* | brave* | microsoft-edge* | opera* | vivaldi* | helium*) ;;
+    *) browser="chromium.desktop" ;;
+  esac
+  local dir
+  for dir in "$HOME/.local/share/applications" "$HOME/.nix-profile/share/applications" /usr/share/applications; do
+    [[ -f $dir/$browser ]] || continue
+    desktop=$dir/$browser
+    break
+  done
+  if [[ -n $desktop ]]; then
+    candidate=$(sed -n 's/^Exec=\([^ ]*\).*/\1/p' "$desktop" | head -n 1)
+  fi
+  if [[ -n $candidate ]]; then
+    printf '%s\n' "$candidate"
+    return
+  fi
+  if have chromium; then
+    printf '%s\n' chromium
+  elif have google-chrome; then
+    printf '%s\n' google-chrome
+  elif [[ $require_bin == 1 ]]; then
+    die "no Chromium-based browser found"
+  else
+    printf '%s\n' chromium
+  fi
+}
+
+print_launch() {
+  local browser=$1
+  shift
+  local wrapper="direct"
+  if have uwsm-app; then
+    wrapper="uwsm-app"
+  fi
+  printf 'wrapper %s\n' "$wrapper"
+  printf 'browser %s\n' "$browser"
+  printf 'argv'
+  local arg
+  for arg in "$@"; do
+    printf ' %q' "$arg"
+  done
+  printf '\n'
+}
+
+run_launch() {
+  local browser=$1
+  shift
+  if have uwsm-app; then
+    setsid uwsm-app -- "$browser" "$@" >/dev/null 2>&1 &
+  else
+    setsid "$browser" "$@" >/dev/null 2>&1 &
+  fi
+}
+
+special_shown() {
+  have hyprctl || return 1
+  hyprctl -j monitors 2>/dev/null | python3 -c '
+import json, sys
+try:
+    monitors = json.load(sys.stdin)
+except Exception:
+    sys.exit(1)
+for monitor in monitors:
+    name = ((monitor.get("specialWorkspace") or {}).get("name")) or ""
+    if name in ("special:omabox", "omabox"):
+        sys.exit(0)
+sys.exit(1)
+'
+}
+
+window_open() {
+  local class_name=$1
+  have hyprctl || return 1
+  hyprctl -j clients 2>/dev/null | python3 -c '
+import json, sys
+wanted = sys.argv[1]
+try:
+    clients = json.load(sys.stdin)
+except Exception:
+    sys.exit(1)
+for client in clients:
+    if client.get("class") == wanted or client.get("initialClass") == wanted:
+        sys.exit(0)
+sys.exit(1)
+' "$class_name"
+}
+
+show_special() {
+  if special_shown; then
+    return 0
+  fi
+  hyprctl dispatch togglespecialworkspace omabox >/dev/null
+}
+
+cmd_launch() {
+  local ident=${1:?service id or key}
+  local print=0
+  if [[ ${2:-} == --print ]]; then
+    print=1
+  fi
+  local spec browser
+  spec=$(python launch-spec "$ident")
+  if (( print )); then
+    browser=$(resolve_browser 0)
+  else
+    browser=$(resolve_browser 1)
+  fi
+  local -a args=()
+  local arg
+  while IFS= read -r arg; do
+    args+=("$arg")
+  done < <(python3 -c 'import json,sys; print("\n".join(json.load(sys.stdin)["args"]))' <<<"$spec")
+  if (( print )); then
+    print_launch "$browser" "${args[@]}"
+    return
+  fi
+  run_launch "$browser" "${args[@]}"
+  if have hyprctl; then
+    show_special || true
+  fi
+}
+
+cmd_toggle() {
+  if [[ ${1:-} == --print ]]; then
+    echo "hyprctl dispatch togglespecialworkspace omabox"
+    return
+  fi
+  have hyprctl || die "hyprctl is not available"
+  hyprctl dispatch togglespecialworkspace omabox >/dev/null
+}
+
+cmd_focus() {
+  local ident=${1:?service id or key}
+  local print=0
+  if [[ ${2:-} == --print ]]; then
+    print=1
+  fi
+  local spec class_name regex
+  spec=$(python launch-spec "$ident")
+  class_name=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["class"])' <<<"$spec")
+  regex=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["classRegex"])' <<<"$spec")
+  if (( print )); then
+    printf 'class %s\n' "$class_name"
+    printf 'hyprctl dispatch movetoworkspacesilent special:omabox,class:%s\n' "$regex"
+    echo "hyprctl dispatch togglespecialworkspace omabox"
+    printf 'hyprctl dispatch focuswindow class:%s\n' "$regex"
+    return
+  fi
+  have hyprctl || die "hyprctl is not available"
+  if ! window_open "$class_name"; then
+    cmd_launch "$ident"
+    return
+  fi
+  hyprctl dispatch movetoworkspacesilent "special:omabox,class:$regex" >/dev/null
+  show_special
+  hyprctl dispatch focuswindow "class:$regex" >/dev/null
+}
+
+cmd_dashboard() {
+  have omarchy-shell || die "omarchy-shell is not available"
+  omarchy-shell omabox dashboard
+}
+
+usage() {
+  cat <<'USAGE'
+Usage: omabox <command> [args]
+
+  init                         Write ~/.config/omabox/services.toml if missing
+  list [--json]                List services
+  add [preset] [options]       Add a preset or a custom service
+  remove <id>                  Remove a service
+  launch <id|1-9> [--print]    Open the service in the shared Chromium
+  focus <id|1-9> [--print]     Focus it on the omabox workspace, or launch it
+  toggle [--print]             Toggle Hyprland special workspace omabox
+  dashboard                    Open the dock's service dashboard
+  setup [--menu]               Install keybinds, window rules, and ~/.local/bin/omabox
+  uninstall [--purge]          Remove those integrations
+  fetch-icons                  Cache favicons for services without a bundled icon
+  class <url> <profile>        Print the Chromium window class
+
+add options: --id --name --url --icon --profile --key --unread --update
+
+Keys, once `omabox setup` has been reloaded by Hyprland:
+  SUPER+O            toggle the omabox workspace
+  SUPER+ALT+1..9     focus the service whose key is that digit
+USAGE
+}
+
+main() {
+  local cmd=${1:-}
+  if [[ -z $cmd || $cmd == -h || $cmd == --help ]]; then
+    usage
+    exit 0
+  fi
+  shift
+  case $cmd in
+    init | list | add | remove | setup | uninstall | fetch-icons | class | get | rules)
+      python "$cmd" "$@"
+      if [[ $cmd == setup ]] && have hyprctl; then
+        hyprctl reload >/dev/null 2>&1 || true
+      fi
+      ;;
+    launch) cmd_launch "$@" ;;
+    focus) cmd_focus "$@" ;;
+    toggle) cmd_toggle "$@" ;;
+    dashboard) cmd_dashboard "$@" ;;
+    *)
+      die "unknown command '$cmd' (try omabox --help)"
+      ;;
+  esac
+}
+
+main "$@"

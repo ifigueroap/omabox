@@ -1,0 +1,31 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install shellcheck and qmllint
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck python3 jq qt6-declarative-dev-tools
+      - name: shellcheck
+        run: shellcheck bin/omabox tests/qmllint.sh
+      - name: Python and CLI tests
+        run: python3 tests/test_omabox.py
+      - name: Window-class model
+        run: node tests/model.test.js
+      - name: qmllint
+        run: tests/qmllint.sh
+      - name: Plugin manifest schema
+        run: |
+          # Mirrors shell/services/PluginRegistry.qml and bin/omarchy-plugin-validate
+          # from basecamp/omarchy quattro: schemaVersion 1, safe entry points, no
+          # symlinks, id not in the reserved omarchy.* namespace.
+          jq -e '.schemaVersion == 1 and (.kinds | index("panel")) != null and .entryPoints.panel == "Panel.qml"' manifest.json >/dev/null
+          test -f Panel.qml
+          test -z "$(find . -name .git -prune -o -type l -print)"
