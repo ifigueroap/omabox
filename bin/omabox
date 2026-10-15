@@ -290,6 +290,8 @@ Usage: omabox <command> [args]
   dashboard                    Open the dock's service dashboard
   setup [--menu]               Install keybinds, window rules, and ~/.local/bin/omabox
   uninstall [--purge]          Remove those integrations
+  config [dock always|special-only]
+                               Show or set dock visibility
   fetch-icons                  Cache favicons for services without a bundled icon
   class <url> <profile>        Print the Chromium window class
 
@@ -316,7 +318,7 @@ main() {
   fi
   shift
   case $cmd in
-    init | list | add | remove | setup | uninstall | fetch-icons | class | get | rules)
+    init | list | add | remove | setup | uninstall | fetch-icons | class | get | rules | config)
       python "$cmd" "$@"
       if [[ $cmd == setup ]] && have hyprctl; then
         hyprctl reload >/dev/null 2>&1 || true

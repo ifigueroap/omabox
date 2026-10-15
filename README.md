@@ -5,8 +5,8 @@ Rambox-like web-app dock for [Omarchy](https://github.com/basecamp/omarchy) 4
 window on the Hyprland special workspace `omabox`.
 
 Omarchy 4 runs the bar, launcher, notifications, OSDs, and lock screen as
-plugins in one Quickshell process. Omabox is a third-party `panel` plugin
-(`keepLoaded: true`) plus a `omabox` command.
+plugins in one Quickshell process. Omabox is a third-party `panel` and
+`bar-widget` plugin (`keepLoaded: true`) plus an `omabox` command.
 
 ## Install
 
@@ -32,17 +32,35 @@ Skip the menu row with `omabox setup` and no `--menu`. Enable the plugin later w
 
 The dock is a layer-shell panel on the right edge of the screen, a vertical pill of service icons plus a `+` button. It appears when the plugin is enabled and the shell has loaded `Panel.qml`. Theme colors come from `qs.Commons` `Color` and `Style`, which the shell updates when the theme changes (`docs/omarchy-shell.md`, `docs/theming.md`).
 
+On a regular workspace the dock stays a short notch on that edge. Moving the pointer onto the notch expands the full pill; leaving it collapses the notch again after 400ms. On special workspace `omabox` the pill stays open and reserves its width. Set `dock = "special-only"` to hide the notch everywhere except that workspace. The default is `always`.
+
+A bar button on the right of the Omarchy bar runs `omabox toggle`, the same action as `Super+Shift+O`. It is a `bar-widget` (`BarWidget.qml`, `defaultSection: "right"`), not a tray-drawer entry, so it stays visible without opening the tray (`docs/omarchy-shell.md`). The widget is a plain `Item` with `triggerPress`: `qs.Ui.BarWidget` and `qs.Ui.WidgetButton` are types the shell does not expose to `~/.config/omarchy/plugins/`.
+
+Enabling a plugin that declares `bar-widget` writes a `bar.layout` entry and does not also append `plugins[]` (`shell/services/PluginRegistry.qml` `setEnabled`). A checkout that was enabled earlier already has `omabox` in `plugins[]`. `omarchy bar put` leaves that entry where it is and does not add a second one, so the button never appears. Disable and enable again after the shell has loaded this manifest:
+
+```bash
+omarchy plugin disable omabox
+omarchy plugin enable omabox
+```
+
+That records `omabox` in `bar.layout.right`. The panel still loads, because `isEnabled` is true for either a bar slot or a `plugins[]` row.
+
 After a later `git pull` in the plugin checkout, restart the shell so it loads new QML. Saving a file under `~/.config/omarchy/plugins/` also reloads plugin code; a type error on the previous load still needs a restart. Hyprland binds live in the generated file `~/.config/hypr/omabox.lua`, which a pull does not rewrite. Run `omabox setup` again after a pull that changes keybinds or window rules, then check the config:
 
 ```bash
-git -C ~/.config/omarchy/plugins/omabox pull
-omabox setup
+git -C ~/.config/omarchy/plugins/omabox fetch origin
+git -C ~/.config/omarchy/plugins/omabox checkout cursor/omabox-hyprctl-34c0
+git -C ~/.config/omarchy/plugins/omabox pull origin cursor/omabox-hyprctl-34c0
+~/.config/omarchy/plugins/omabox/bin/omabox setup
 hyprctl configerrors
 omarchy restart shell
+omarchy plugin disable omabox
+omarchy plugin enable omabox
 omarchy-shell omabox dashboard
+omabox config
 ```
 
-`omabox dashboard` prints `ok` and opens the service dashboard when the panel is mounted. `Target not found.` means `Panel.qml` did not load, so no `omabox` IPC target was registered. `omarchy-restart-shell` is the same restart. A CLI-only change (launch, focus, toggle) is picked up through the `~/.local/bin/omabox` symlink without a shell restart.
+`omabox dashboard` prints `ok` and opens the service dashboard when the panel is mounted. `Target not found.` means `Panel.qml` did not load, so no `omabox` IPC target was registered. `omarchy-restart-shell` is the same restart. A CLI-only change (launch, focus, toggle) is picked up through the `~/.local/bin/omabox` symlink without a shell restart. `omabox config` prints `dock=always` until you change it.
 
 ## Keys
 
@@ -70,9 +88,9 @@ hyprctl configerrors
 
 `omabox setup`, `omabox add`, and `omabox remove` rewrite `omabox.lua`, so put the custom chord back after those commands.
 
-Click a dock icon to focus or launch that one service. The window rule parks new apps on special workspace `omabox` without showing it (`workspace` may end with ` silent` in the [Hyprland window rules](https://wiki.hypr.land/Configuring/Basics/Window-Rules/)). The click then leaves only that service on `special:omabox`: other Omabox windows move to `special:omabox-hidden`, a second window of the same class is closed, and the remaining window is focused with `hl.dsp.focus`. An empty special workspace does not stay open, which is why toggling it before Chromium maps looks like a click that did nothing. The `+` button opens the dashboard (also `omabox dashboard`, or the menu row "Omabox services").
+Click a dock icon, or the bar button, to focus or launch that one service. The window rule parks new apps on special workspace `omabox` without showing it (`workspace` may end with ` silent` in the [Hyprland window rules](https://wiki.hypr.land/Configuring/Basics/Window-Rules/)). The click then leaves only that service on `special:omabox`: other Omabox windows move to `special:omabox-hidden`, a second window of the same class is closed, and the remaining window is focused with `hl.dsp.focus`. An empty special workspace does not stay open, which is why toggling it before Chromium maps looks like a click that did nothing. The `+` button opens the dashboard (also `omabox dashboard`, or the menu row "Omabox services").
 
-If a window of that class is already mapped, `omabox focus` and `omabox launch` show it and do not start Chromium again. A second `--app` launch is what opens another WhatsApp window and the "open in another window" dialog. When none is mapped, Omabox launches once.
+If a window of that class is already mapped, `omabox focus` and `omabox launch` show it and do not start Chromium again. A second `--app` launch is what opens another WhatsApp window and the "open in another window" dialog. When none is mapped, Omabox launches once. A `hyprctl` client list that is empty or unreadable does not count as "no window": Omabox exits without launching, so a failed `hyprctl` cannot open another Chromium. The shared `--user-data-dir` is left running.
 
 Quattro's `hyprctl dispatch` runs Lua, the same shape as Omarchy's scratchpad binds. Keyword dispatchers (`togglespecialworkspace`, `focuswindow`, `movetoworkspacesilent`) fail with `')' expected near 'omabox'`. Omabox calls:
 
@@ -81,8 +99,6 @@ hyprctl dispatch 'hl.dsp.workspace.toggle_special("omabox")'
 hyprctl dispatch 'hl.dsp.window.move({ workspace = "special:omabox", follow = false, window = "class:chrome-web.whatsapp.com__-WhatsApp" })'
 hyprctl dispatch 'hl.dsp.focus({ window = "class:chrome-web.whatsapp.com__-WhatsApp" })'
 ```
-
-If the window is already mapped, `omabox focus` and `omabox launch` show it and do not start a second Chromium. Chromium would otherwise print that it is opening in the existing session and leave the hidden window where it is. If that process is running but Hyprland has no matching window, Omabox restarts the shared browser (every Omabox profile lives in one `--user-data-dir`) and launches the service again.
 
 ```bash
 omabox launch whatsapp --print   # browser and flags, no window
@@ -128,6 +144,26 @@ omabox fetch-icons          # favicon cache for services without a bundled icon
 
 `add` and `remove` rewrite `~/.config/hypr/omabox.lua` when setup has been run. Reload Hyprland (`hyprctl reload`) so new window rules load. `hypr.` modules are cleared on each config load (`default/hypr/bootstrap.lua`).
 
+Dock visibility is a separate file, `~/.config/omabox/config.toml`, so rewriting `services.toml` does not drop it:
+
+```toml
+dock = "always"
+```
+
+| Value | Dock |
+| --- | --- |
+| `always` | Notch on regular workspaces; full pill on `special:omabox` and while the pointer is over the notch. Default |
+| `special-only` | Full pill only while `special:omabox` is the active workspace. No notch elsewhere |
+
+```bash
+omabox config                         # dock=always
+omabox config dock                    # always
+omabox config dock special-only
+omabox config dock always
+```
+
+`omabox list --json` includes the same value as `"dock"`. The dashboard has Always and Workspace only chips, which call `omabox config dock …`. An unknown value is rejected. A missing or unreadable file is treated as `always`. `omabox config dock` rewrites the whole file as that one key. `omabox uninstall --purge` deletes `~/.config/omabox`, including `config.toml`.
+
 ## How windows are launched and matched
 
 Every service uses one shared data directory and its own profile:
@@ -171,6 +207,7 @@ Checked against `basecamp/omarchy` branch `quattro` (the default branch):
 - Enablement: third-party plugins turn on by appearing in `plugins[]` (`omarchy plugin enable`). `shell.json` has no per-plugin config object
 - Loading: `keepLoaded` panels mount at startup in `shell/shell.qml`; entry points are `Item`s and receive `omarchyPath`, `shell`, `manifest`
 - IPC: target `omabox` (`dashboard`, `reload`). First-party code uses the `ShellIpc` type from `shell/Commons/ShellIpc.qml`. That type is not visible to a file loaded from `~/.config/omarchy/plugins/`, so Omabox uses `IpcHandler` (`Quickshell.Io`) plus the `IpcRegistry` singleton, which is what `ShellIpc.qml` does internally. `Style`, `Util`, and `Color` are singletons and stay available.
+- Bar: `kinds` includes `bar-widget` with `entryPoints.barWidget` and `barWidget.defaultSection` `right` (`docs/omarchy-shell.md`, `bin/omarchy-plugin-validate`, `default/agents/skills/omarchy/plugins.md`). `tray` only draws inside the tray drawer. Third-party widgets receive `PluginBarApi` (`shell/Ui/PluginBarApi.qml`); `bar.run("omabox toggle")` is the click. `BarWidget` / `WidgetButton` in `qs.Ui` are types, same limit as `ShellIpc`, so the entry point does not instantiate them. The bar calls `triggerPress` on the widget item (`shell/Ui/Bar.qml`).
 - Colors: `import qs.Commons as Commons` and `Commons.Color` / `Style` (`docs/omarchy-shell.md`, `shell/Commons/Color.qml`, `docs/theming.md`)
 - Menu rows: `docs/menu.md`, `~/.config/omarchy/extensions/omarchy-menu.jsonc`
 - Hyprland: `o.bind` / `o.window` from `default/hypr/helpers.lua`, user binds in `~/.config/hypr/bindings.lua`, module path in `default/hypr/bootstrap.lua`
@@ -186,7 +223,8 @@ WhatsApp, Discord, Zulip, Telegram, Claude, and the X mark used for Grok Bot are
 - A URL whose path is not `/` does not get a double underscore. Discord is `chrome-discord.com__app-Discord`. The dock computes the class from the URL; it does not assume every service is `__`.
 - Zulip does nothing until it has an `https` URL.
 - `unread` only sees titles Chromium puts on the window. Sites that show a count only inside the page stay at the urgent-dot fallback.
-- The dashboard edits services by shelling out to `omabox`. It does not edit the TOML file from QML.
+- The dashboard edits services by shelling out to `omabox`. It does not edit the TOML file from QML. Dock mode uses the same path (`omabox config dock …`).
+- Whether `special:omabox` is showing is read from `Hyprland.focusedWorkspace` and the focused monitor's `specialWorkspace` / `activeWorkspace` names. A compositor that reports the special workspace under a different field would leave the notch up while Omabox is open.
 - `fetch-icons` uses Google's favicon service and accepts only a PNG response.
 
 ## What is not tested
@@ -195,8 +233,9 @@ This repo's CI runs shellcheck, qmllint (syntax only; Quickshell is not installe
 
 Not run, because there is no Omarchy desktop here:
 
-- Quickshell loading the panel, live theme updates, layer-shell anchors, or `ShellIpc`
+- Quickshell loading the panel or the bar widget, live theme updates, layer-shell anchors, notch hover, or `ShellIpc`
 - A real Chromium `--app` window and its Hyprland `class`
 - `windowtitlev2` / `urgent` delivery into the badge
 - `hyprctl dispatch` or `hyprctl reload` against a running compositor (tests check the Lua strings with a fake `hyprctl`)
-- `omarchy plugin add` itself (the manifest is checked against the same rules as `omarchy-plugin-validate`)
+- `omarchy plugin add` / `omarchy bar put` against a running shell (placement follows `PluginRegistry.setEnabled` in the quattro tree)
+- The dashboard chips in a real shell (there is no browser UI to click; the chips call `omabox config`)

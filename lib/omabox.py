@@ -53,6 +53,48 @@ def config_file() -> Path:
     return config_dir() / "services.toml"
 
 
+DOCK_MODES = ("always", "special-only")
+
+
+def settings_file() -> Path:
+    return config_dir() / "config.toml"
+
+
+def load_dock_mode() -> str:
+    path = settings_file()
+    if not path.is_file():
+        return "always"
+    try:
+        data = tomllib.loads(path.read_text(encoding="utf-8"))
+    except tomllib.TOMLDecodeError:
+        return "always"
+    mode = data.get("dock")
+    if isinstance(mode, str) and mode in DOCK_MODES:
+        return mode
+    return "always"
+
+
+def write_dock_mode(mode: str) -> None:
+    if mode not in DOCK_MODES:
+        die("dock must be 'always' or 'special-only'")
+    path = settings_file()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(f'dock = "{mode}"\n', encoding="utf-8")
+
+
+def cmd_config(key: str = "", value: str = "") -> None:
+    if not key:
+        print(f"dock={load_dock_mode()}")
+        return
+    if key != "dock":
+        die(f"unknown setting '{key}'")
+    if not value:
+        print(load_dock_mode())
+        return
+    write_dock_mode(value)
+    print(value)
+
+
 def data_dir() -> Path:
     return home() / ".local" / "share" / "omabox"
 
@@ -476,7 +518,7 @@ def cmd_init(force: bool = False, announce: bool = True) -> None:
 def cmd_list(as_json: bool) -> None:
     services = [public_service(service) for service in load_services()]
     if as_json:
-        json.dump({"services": services}, sys.stdout)
+        json.dump({"services": services, "dock": load_dock_mode()}, sys.stdout)
         sys.stdout.write("\n")
         return
     if not services:
@@ -894,6 +936,10 @@ def build_parser() -> argparse.ArgumentParser:
     listing = sub.add_parser("list")
     listing.add_argument("--json", action="store_true")
 
+    config = sub.add_parser("config")
+    config.add_argument("key", nargs="?", default="")
+    config.add_argument("value", nargs="?", default="")
+
     get = sub.add_parser("get")
     get.add_argument("id")
 
@@ -942,6 +988,8 @@ def main(argv: list[str] | None = None) -> None:
         cmd_init(force=args.force)
     elif args.command == "list":
         cmd_list(as_json=args.json)
+    elif args.command == "config":
+        cmd_config(args.key, args.value)
     elif args.command == "get":
         cmd_get(args.id)
     elif args.command == "class":

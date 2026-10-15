@@ -19,6 +19,9 @@ Item {
 
   property var services: []
   property var windows: ({})
+  property string dockMode: "always"
+  property bool omaboxActive: false
+  property var lastArgs: []
 
   readonly property string home: Quickshell.env("HOME")
   readonly property string configPath: home + "/.config/omabox/services.toml"
@@ -56,9 +59,28 @@ Item {
     try {
       var data = JSON.parse(raw || "{}")
       root.services = data && data.services ? data.services : []
+      if (data && (data.dock === "always" || data.dock === "special-only"))
+        root.dockMode = data.dock
     } catch (error) {
       console.warn("omabox: service list is not JSON")
     }
+  }
+
+  function syncWorkspace() {
+    var names = []
+    var ws = Hyprland.focusedWorkspace
+    if (ws && ws.name) names.push(String(ws.name))
+    var monitor = Hyprland.focusedMonitor
+    var ipc = monitor && monitor.lastIpcObject ? monitor.lastIpcObject : null
+    if (ipc && ipc.specialWorkspace && ipc.specialWorkspace.name)
+      names.push(String(ipc.specialWorkspace.name))
+    if (ipc && ipc.activeWorkspace && ipc.activeWorkspace.name)
+      names.push(String(ipc.activeWorkspace.name))
+    var active = false
+    for (var i = 0; i < names.length; i++) {
+      if (names[i] === "special:omabox" || names[i] === "omabox") active = true
+    }
+    root.omaboxActive = active
   }
 
   function syncToplevels() {
@@ -128,6 +150,7 @@ Item {
     } else if (name === "openwindow" || name === "windowtitle") {
       syncToplevels()
     }
+    syncWorkspace()
   }
 
   // Same Process path as `omabox list`, which is what fills the dock.
@@ -142,6 +165,7 @@ Item {
       console.warn("omabox: still launching; click again in a moment")
       return
     }
+    root.lastArgs = args
     var argv = [root.cliPath]
     for (var i = 0; i < args.length; i++) argv.push(String(args[i]))
     launchProc.command = argv
@@ -163,6 +187,15 @@ Item {
     onLoaded: root.reloadServices()
     onFileChanged: reload()
     onLoadFailed: initProc.running = true
+  }
+
+  FileView {
+    id: settingsFile
+    path: root.home + "/.config/omabox/config.toml"
+    watchChanges: true
+    printErrors: false
+    onLoaded: root.reloadServices()
+    onFileChanged: reload()
   }
 
   Process {
@@ -189,6 +222,7 @@ Item {
     }
     onExited: function(exitCode) {
       if (exitCode !== 0) console.warn("omabox: launch exited " + exitCode)
+      if (root.lastArgs.length > 0 && root.lastArgs[0] === "config") root.reloadServices()
     }
   }
 
@@ -203,6 +237,7 @@ Item {
   Component.onCompleted: {
     reloadServices()
     syncToplevels()
+    syncWorkspace()
   }
 
   // ShellIpc is a non-singleton type in qs.Commons. Quickshell exposes those

@@ -21,4 +21,4 @@ cd "$root"
   --unqualified disable \
   --alias disable \
   --required disable \
-  Panel.qml DockWindow.qml DashboardWindow.qml
+  Panel.qml DockWindow.qml DashboardWindow.qml BarWidget.qml

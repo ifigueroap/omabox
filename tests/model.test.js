@@ -32,4 +32,11 @@ assert.strictEqual(Logic.unreadCount(titled.title, "^\\((\\d+)\\)"), 3)
 assert.strictEqual(Logic.normAddress("ABC"), "0xabc")
 assert.strictEqual(Logic.normAddress("0xABC"), "0xabc")
 
+assert.strictEqual(Logic.dockPresentation("always", false, false), "notch")
+assert.strictEqual(Logic.dockPresentation("always", false, true), "full")
+assert.strictEqual(Logic.dockPresentation("always", true, false), "full")
+assert.strictEqual(Logic.dockPresentation("special-only", false, true), "hidden")
+assert.strictEqual(Logic.dockPresentation("special-only", true, false), "full")
+assert.strictEqual(Logic.dockPresentation("other", false, false), "notch")
+
 console.log("model.test.js ok")

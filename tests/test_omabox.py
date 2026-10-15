@@ -172,6 +172,7 @@ class ConfigTests(unittest.TestCase):
         zulip = next(row for row in payload["services"] if row["id"] == "zulip")
         self.assertEqual(zulip["class"], "")
         self.assertFalse(zulip["ready"])
+        self.assertEqual(payload["dock"], "always")
 
     def test_launch_spec(self) -> None:
         omabox.cmd_init()
@@ -218,6 +219,21 @@ class ConfigTests(unittest.TestCase):
         self.assertFalse(link.exists())
         omabox.cmd_uninstall(purge=True)
         self.assertFalse(omabox.config_dir().exists())
+
+    def test_dock_mode_roundtrip(self) -> None:
+        self.assertEqual(omabox.load_dock_mode(), "always")
+        omabox.cmd_config("dock", "special-only")
+        self.assertEqual(omabox.settings_file().read_text(encoding="utf-8").strip(), 'dock = "special-only"')
+        self.assertEqual(omabox.load_dock_mode(), "special-only")
+        listed = json.loads(subprocess.check_output(
+            [sys.executable, str(ROOT / "lib" / "omabox.py"), "list", "--json"],
+            text=True,
+        ))
+        self.assertEqual(listed["dock"], "special-only")
+        with self.assertRaises(SystemExit):
+            omabox.cmd_config("dock", "sometimes")
+        with self.assertRaises(SystemExit):
+            omabox.cmd_config("theme", "dark")
 
     def test_menu_insert_keeps_existing_entries(self) -> None:
         menu = self.home / ".config" / "omarchy" / "extensions" / "omarchy-menu.jsonc"
