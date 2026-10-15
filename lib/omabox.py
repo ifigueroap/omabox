@@ -201,9 +201,12 @@ def split_document(text: str) -> tuple[str, list[str]]:
 
 def parse_block(block: str) -> dict:
     data = tomllib.loads(block)
-    if not isinstance(data, dict) or "id" not in data:
+    # A block is one TOML array-of-tables entry: [[service]] fields live under
+    # data["service"][0], not at the document root.
+    rows = data.get("service") if isinstance(data, dict) else None
+    if not isinstance(rows, list) or len(rows) != 1 or not isinstance(rows[0], dict) or "id" not in rows[0]:
         die("a [[service]] block is missing id")
-    return normalize_service(data)
+    return normalize_service(rows[0])
 
 
 def normalize_service(data: dict) -> dict:

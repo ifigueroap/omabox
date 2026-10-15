@@ -143,7 +143,7 @@ WhatsApp, Discord, Zulip, Telegram, Claude, and the X mark used for Grok Bot are
 
 ## What is not tested
 
-This repo's CI runs shellcheck, qmllint (syntax only; Quickshell is not installed), and unit tests for config, the window class (including a line-for-line check against Omarchy's `Default` formula), launch/focus command lines, and setup/uninstall file edits.
+This repo's CI runs shellcheck, qmllint (syntax only; Quickshell is not installed, so import and required-property checks are disabled), and unit tests for config, the window class (including a line-for-line check against Omarchy's `Default` formula), launch/focus command lines, and setup/uninstall file edits.
 
 Not run, because there is no Omarchy desktop here:
 

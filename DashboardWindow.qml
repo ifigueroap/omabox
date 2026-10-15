@@ -64,6 +64,8 @@ PanelWindow {
 
   Rectangle {
     id: card
+    focus: true
+    Keys.onEscapePressed: dashboard.shown = false
     anchors.fill: parent
     anchors.rightMargin: Style.space(72)
     anchors.topMargin: Style.gapsOut
@@ -332,6 +334,5 @@ PanelWindow {
     }
   }
 
-  Keys.onEscapePressed: dashboard.shown = false
-  onShownChanged: if (shown) contentItem.forceActiveFocus()
+  onShownChanged: if (shown) card.forceActiveFocus()
 }

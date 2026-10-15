@@ -188,17 +188,6 @@ Item {
     }
   }
 
-  Variants {
-    model: Quickshell.screens
-    delegate: Component {
-      DockWindow {
-        required property var modelData
-        screen: modelData
-        host: root
-      }
-    }
-  }
-
   DashboardWindow {
     id: dashboard
     host: root
@@ -212,6 +201,17 @@ Item {
         }
       }
       return Quickshell.screens.length ? Quickshell.screens[0] : null
+    }
+  }
+
+  Variants {
+    model: Quickshell.screens
+    delegate: Component {
+      DockWindow {
+        required property var modelData
+        screen: modelData
+        host: root
+      }
     }
   }
 }

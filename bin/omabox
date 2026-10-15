@@ -6,7 +6,7 @@
 set -euo pipefail
 
 SOURCE=$(readlink -f "$0")
-ROOT=$(CDPATH= cd -- "$(dirname "$SOURCE")/.." && pwd)
+ROOT=$(CDPATH='' cd -- "$(dirname "$SOURCE")/.." && pwd)
 LIB="$ROOT/lib/omabox.py"
 
 die() {

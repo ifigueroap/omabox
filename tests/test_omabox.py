@@ -157,7 +157,7 @@ class ConfigTests(unittest.TestCase):
 
         omabox.main(["add", "zulip", "--url", "https://chat.example.org/", "--update"])
         lua = (self.home / ".config" / "hypr" / "omabox.lua").read_text(encoding="utf-8")
-        self.assertIn("chat.example.org", lua)
+        self.assertIn(r"chat\\.example\\.org", lua)
 
         omabox.cmd_setup(menu=True)
         bindings = (self.home / ".config" / "hypr" / "bindings.lua").read_text(encoding="utf-8")
