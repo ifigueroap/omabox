@@ -86,6 +86,37 @@ function eventTitle(data) {
   return { address: normAddress(text.slice(0, comma)), title: text.slice(comma + 1) }
 }
 
+// Do not disturb overrides per-service sound and badges. A missing flag stays on
+// so an older services list keeps making sound and showing badges.
+function isDnd(dnd) {
+  return dnd === true || dnd === "true" || dnd === 1
+}
+
+function flagEnabled(value) {
+  return value !== false && value !== "false" && value !== 0
+}
+
+function allowsSound(service, dnd) {
+  if (isDnd(dnd)) return false
+  if (!service) return true
+  return flagEnabled(service.sound)
+}
+
+function allowsBadges(service, dnd) {
+  if (isDnd(dnd)) return false
+  if (!service) return true
+  return flagEnabled(service.badges)
+}
+
+function serviceMenuItems(service) {
+  var sound = !service || flagEnabled(service.sound)
+  var badges = !service || flagEnabled(service.badges)
+  return [
+    { field: "sound", label: "Sound", enabled: sound, next: sound ? "false" : "true" },
+    { field: "badges", label: "Badges", enabled: badges, next: badges ? "false" : "true" }
+  ]
+}
+
 if (typeof module === "object" && module.exports) {
   module.exports = {
     parseHttpUrl: parseHttpUrl,
@@ -95,6 +126,10 @@ if (typeof module === "object" && module.exports) {
     dockPresentation: dockPresentation,
     dockOpacity: dockOpacity,
     DOCK_IDLE_OPACITY: DOCK_IDLE_OPACITY,
-    eventTitle: eventTitle
+    eventTitle: eventTitle,
+    isDnd: isDnd,
+    allowsSound: allowsSound,
+    allowsBadges: allowsBadges,
+    serviceMenuItems: serviceMenuItems
   }
 }

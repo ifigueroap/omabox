@@ -22,6 +22,7 @@ Item {
   property string dockMode: "always"
   property string dockEdge: "right"
   property bool dockPinned: false
+  property bool doNotDisturb: false
   property bool omaboxActive: false
   property var lastArgs: []
 
@@ -67,6 +68,8 @@ Item {
         root.dockEdge = data.edge
       if (data && (data.pinned === true || data.pinned === false))
         root.dockPinned = data.pinned
+      if (data && (data.dnd === true || data.dnd === false))
+        root.doNotDisturb = data.dnd
     } catch (error) {
       console.warn("omabox: service list is not JSON")
     }
@@ -228,7 +231,8 @@ Item {
     }
     onExited: function(exitCode) {
       if (exitCode !== 0) console.warn("omabox: launch exited " + exitCode)
-      if (root.lastArgs.length > 0 && root.lastArgs[0] === "config") root.reloadServices()
+      if (root.lastArgs.length > 0 && (root.lastArgs[0] === "config" || root.lastArgs[0] === "service"))
+        root.reloadServices()
     }
   }
 

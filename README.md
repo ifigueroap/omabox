@@ -60,7 +60,7 @@ omarchy-shell omabox dashboard
 omabox config
 ```
 
-`omabox dashboard` prints `ok` and opens the service dashboard when the panel is mounted. `Target not found.` means `Panel.qml` did not load, so no `omabox` IPC target was registered. `omarchy-restart-shell` is the same restart. A CLI-only change (launch, focus, toggle) is picked up through the `~/.local/bin/omabox` symlink without a shell restart. `omabox config` prints `dock=always`, `edge=right`, and `pinned=false` until you change them.
+`omabox dashboard` prints `ok` and opens the service dashboard when the panel is mounted. `Target not found.` means `Panel.qml` did not load, so no `omabox` IPC target was registered. `omarchy-restart-shell` is the same restart. A CLI-only change (launch, focus, toggle) is picked up through the `~/.local/bin/omabox` symlink without a shell restart. `omabox config` prints `dock=always`, `edge=right`, `pinned=false`, and `dnd=false` until you change them.
 
 ## Keys
 
@@ -87,6 +87,8 @@ hyprctl configerrors
 ```
 
 `omabox setup`, `omabox add`, and `omabox remove` rewrite `omabox.lua`, so put the custom chord back after those commands.
+
+Right-click a service icon, or press and hold it, to open a small menu with **Sound** and **Badges**. Sound off mutes that service. Badges off hides its unread count and the urgent dot. The last control on the pill, after `+`, is **Do not disturb**. It turns sounds and badges off for every service, whatever each service has saved, until you turn it off. The dock stays the same edge pill; the menu opens inward from the icon.
 
 Click a dock icon, or the bar button, to focus or launch that one service. The window rule parks new apps on special workspace `omabox` without showing it (`workspace` may end with ` silent` in the [Hyprland window rules](https://wiki.hypr.land/Configuring/Basics/Window-Rules/)). The click then leaves only that service on `special:omabox`: other Omabox windows move to `special:omabox-hidden`, a second window of the same class is closed, and the remaining window is focused with `hl.dsp.focus`. An empty special workspace does not stay open, which is why toggling it before Chromium maps looks like a click that did nothing. The `+` button opens the dashboard (also `omabox dashboard`, or the menu row "Omabox services").
 
@@ -131,6 +133,8 @@ unread = "^\\((\\d+)\\)"
 | `profile` | Chromium `--profile-directory` (no slashes). Spaces are allowed |
 | `key` | `1`–`9` for `Super+Alt+<key>`, or empty |
 | `unread` | JavaScript/Python regex. The first capture group is the badge count. Default `^\((\d+)\)` matches titles like `(3) WhatsApp` |
+| `sound` | `true` (default) or `false`. `false` mutes that service. Omitted on older files, which stay unmuted |
+| `badges` | `true` (default) or `false`. `false` hides the unread badge and urgent dot. Omitted on older files, which keep badges |
 
 Presets: WhatsApp, Slack, Discord, Zulip (URL left blank), Telegram, Grok, ChatGPT, Claude, Grok Bot (`https://x.com/i/grok`).
 
@@ -150,6 +154,7 @@ Dock visibility is a separate file, `~/.config/omabox/config.toml`, so rewriting
 dock = "always"
 edge = "right"
 pinned = false
+dnd = false
 ```
 
 | Key | Values | Meaning |
@@ -157,19 +162,26 @@ pinned = false
 | `dock` | `always` (default), `special-only` | `always`: notch on regular workspaces, full pill on `special:omabox` and while the pointer is over the notch. `special-only`: full pill only while `special:omabox` is active |
 | `edge` | `left`, `right` (default), `top`, `bottom` | Which screen edge holds the dock. Left and right are a vertical pill. Top and bottom are a horizontal row |
 | `pinned` | `true`, `false` (default) | `true` keeps the pill fully open and opaque. `false` is the notch that expands on hover. Pin does not show the dock on other workspaces when `dock` is `special-only` |
+| `dnd` | `true`, `false` (default) | Do not disturb. `true` turns sounds and badges off for every service. Per-service `sound` and `badges` stay as they are and apply again when this is `false`. `do_not_disturb` is accepted as the same setting |
 
 While the pointer is off the dock, and the dock is neither pinned nor held open by `special:omabox`, the notch is drawn at 35% opacity using the same `Color` and `Style` values. Hover, pin, and that workspace use opacity 1.
 
 ```bash
-omabox config                         # dock=always / edge=right / pinned=false
+omabox config                         # dock=always / edge=right / pinned=false / dnd=false
 omabox config dock                    # always
 omabox config dock special-only
 omabox config edge bottom
 omabox config pinned true
 omabox config pinned false
+omabox config dnd true
+omabox service whatsapp sound false
+omabox service whatsapp badges false
+omabox service whatsapp sound         # prints true or false
 ```
 
-`omabox list --json` includes `"dock"`, `"edge"`, and `"pinned"`. The dashboard chips call `omabox config dock`, `omabox config edge`, and `omabox config pinned`. An unknown value is rejected. A missing or unreadable file uses the defaults above. Saving one key rewrites `config.toml` with all three keys and keeps any other flat string, boolean, or integer keys already in the file. `omabox uninstall --purge` deletes `~/.config/omabox`, including `config.toml`.
+`omabox list --json` includes `"dock"`, `"edge"`, `"pinned"`, and `"dnd"`. Each service includes `"sound"`, `"badges"`, `"soundEffective"`, and `"badgesEffective"`. The effective flags are false while Do not disturb is on. The dashboard chips call `omabox config dock`, `omabox config edge`, `omabox config pinned`, and `omabox config dnd`. Service rows call `omabox service <id> sound|badges true|false`. An unknown value is rejected. A missing or unreadable file uses the defaults above. Saving one key rewrites `config.toml` with `dock`, `edge`, `pinned`, and `dnd`, and keeps any other flat string, boolean, or integer keys already in the file. Changing Do not disturb does not rewrite `services.toml`. `omabox add --update` keeps a service's `sound`, `badges`, and any other flat keys on that block. `omabox init` still copies presets only when `services.toml` is missing, so an upgrade does not replace services you already have. `omabox uninstall --purge` deletes `~/.config/omabox`, including `config.toml`.
+
+Sound and badges are best-effort on Wayland. Profiles share one Chromium process, so the launcher does not pass `--mute-audio` (that would silence every service). After a window is shown, and whenever a flag changes, Omabox asks PipeWire (`wpctl`) or Pulse (`pactl`) to mute output streams whose process is the Omabox Chromium and whose media name matches the service. Do not disturb mutes every stream from that process. Streams that are not Omabox are left alone. Notification badges in the dock follow `badges` and `dnd` immediately. Chromium's own notifications are a profile preference (`default_content_setting_values.notifications`) written only when that profile's `Preferences` file already exists, is valid JSON, and the Omabox Chromium is not running. Otherwise the file is left alone and the Omabox flag is still saved. The launcher applies that preference before it starts the browser.
 
 ## How windows are launched and matched
 
@@ -230,7 +242,8 @@ WhatsApp, Discord, Zulip, Telegram, Claude, and the X mark used for Grok Bot are
 - A URL whose path is not `/` does not get a double underscore. Discord is `chrome-discord.com__app-Discord`. The dock computes the class from the URL; it does not assume every service is `__`.
 - Zulip does nothing until it has an `https` URL.
 - `unread` only sees titles Chromium puts on the window. Sites that show a count only inside the page stay at the urgent-dot fallback.
-- The dashboard edits services by shelling out to `omabox`. It does not edit the TOML file from QML. Dock mode, edge, and pin use the same path (`omabox config …`).
+- The dashboard edits services by shelling out to `omabox`. It does not edit the TOML file from QML. Dock mode, edge, pin, Do not disturb, and per-service sound and badges use the same path (`omabox config …`, `omabox service …`).
+- Per-service mute follows the Chromium stream's media name. A stream whose name does not contain the service name, profile, or id stays audible until Do not disturb mutes the whole Omabox browser. Turning Do not disturb off unmutes those streams again.
 - Whether `special:omabox` is showing is read from `Hyprland.focusedWorkspace` and the focused monitor's `specialWorkspace` / `activeWorkspace` names. A compositor that reports the special workspace under a different field would leave the notch up while Omabox is open.
 - `fetch-icons` uses Google's favicon service and accepts only a PNG response.
 
@@ -245,4 +258,6 @@ Not run, because there is no Omarchy desktop here:
 - `windowtitlev2` / `urgent` delivery into the badge
 - `hyprctl dispatch` or `hyprctl reload` against a running compositor (tests check the Lua strings with a fake `hyprctl`)
 - `omarchy plugin add` / `omarchy bar put` against a running shell (placement follows `PluginRegistry.setEnabled` in the quattro tree)
-- The dashboard chips in a real shell (there is no browser UI to click; the chips call `omabox config`)
+- The dashboard chips in a real shell (there is no browser UI to click; the chips call `omabox config` and `omabox service`)
+- A live right-click or long-press on the dock (the menu items and the Do not disturb override are covered by `logic.js` and the Python flag tests; qmllint only checks syntax)
+- `wpctl` / `pactl` against a running PipeWire session (tests feed fixture node lists and do not mute a real stream)
