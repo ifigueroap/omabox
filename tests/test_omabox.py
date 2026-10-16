@@ -76,6 +76,22 @@ class IpcTests(unittest.TestCase):
         self.assertIn("function reload(): string", source)
 
 
+class BarBadgeTests(unittest.TestCase):
+    def test_bar_reuses_dock_unread_and_keeps_toggle(self) -> None:
+        bar = (ROOT / "BarWidget.qml").read_text(encoding="utf-8")
+        dock = (ROOT / "DockWindow.qml").read_text(encoding="utf-8")
+        panel = (ROOT / "Panel.qml").read_text(encoding="utf-8")
+        self.assertIn('root.bar.run("omabox toggle")', bar)
+        self.assertIn("Logic.totalUnread(services, windows, doNotDisturb)", bar)
+        self.assertIn("root.unreadTotal > 0", bar)
+        self.assertIn("Logic.handleWindowEvent", bar)
+        self.assertIn("Logic.syncToplevels", bar)
+        self.assertNotIn("MouseArea", bar)
+        self.assertIn("Logic.serviceUnread", dock)
+        self.assertIn("Logic.handleWindowEvent", panel)
+        self.assertIn("Logic.syncToplevels", panel)
+
+
 class ClassTests(unittest.TestCase):
     def test_golden_classes(self) -> None:
         for line in CLASSES.read_text(encoding="utf-8").splitlines():

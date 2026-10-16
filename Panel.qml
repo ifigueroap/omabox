@@ -96,69 +96,14 @@ Item {
     var values = []
     if (Hyprland.toplevels && Hyprland.toplevels.values)
       values = Hyprland.toplevels.values
-    var next = {}
-    var seen = {}
-    for (var i = 0; i < values.length; i++) {
-      var top = values[i]
-      var ipc = top.lastIpcObject || {}
-      var wayland = top.wayland || null
-      var key = Logic.normAddress(ipc.address || top.address || "")
-      if (!key) continue
-      seen[key] = true
-      var prev = root.windows[key] || null
-      var wm = String(ipc.class || ipc.initialClass || (wayland && wayland.appId) || "")
-      var title = String(ipc.title || ipc.initialTitle || "")
-      next[key] = {
-        className: wm || (prev ? prev.className : ""),
-        title: title || (prev ? prev.title : ""),
-        urgent: prev ? prev.urgent === true : false
-      }
-    }
-    if (values.length === 0) {
-      for (var kept in root.windows) next[kept] = root.windows[kept]
-    }
-    root.windows = next
-  }
-
-  function mergeWindow(address, patch) {
-    var key = Logic.normAddress(address)
-    if (!key) return
-    var next = {}
-    for (var existing in root.windows) next[existing] = root.windows[existing]
-    var prev = next[key] || { className: "", title: "", urgent: false }
-    next[key] = {
-      className: patch.className !== undefined ? patch.className : prev.className,
-      title: patch.title !== undefined ? patch.title : prev.title,
-      urgent: patch.urgent !== undefined ? patch.urgent : prev.urgent
-    }
-    root.windows = next
-  }
-
-  function forgetWindow(address) {
-    var key = Logic.normAddress(address)
-    var next = {}
-    for (var existing in root.windows) {
-      if (existing !== key) next[existing] = root.windows[existing]
-    }
-    root.windows = next
+    root.windows = Logic.syncToplevels(root.windows, values)
   }
 
   function handleEvent(event) {
     if (!event || !event.name) return
     var name = String(event.name)
-    var data = event.data !== undefined && event.data !== null ? String(event.data) : ""
-    if (name === "windowtitlev2") {
-      var parsed = Logic.eventTitle(data)
-      mergeWindow(parsed.address, { title: parsed.title })
-    } else if (name === "urgent") {
-      mergeWindow(data, { urgent: true })
-    } else if (name === "activewindowv2") {
-      mergeWindow(data, { urgent: false })
-    } else if (name === "closewindow") {
-      forgetWindow(data)
-    } else if (name === "openwindow" || name === "windowtitle") {
-      syncToplevels()
-    }
+    if (name === "openwindow" || name === "windowtitle") root.syncToplevels()
+    else root.windows = Logic.handleWindowEvent(root.windows, event)
     syncWorkspace()
   }
 

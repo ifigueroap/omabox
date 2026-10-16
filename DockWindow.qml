@@ -161,15 +161,7 @@ PanelWindow {
   }
 
   function unreadFor(service) {
-    var best = 0
-    var rows = window.host ? window.host.windows : ({})
-    for (var address in rows) {
-      var row = rows[address]
-      if (!row || row.className !== service.class) continue
-      var count = Logic.unreadCount(row.title, service.unread)
-      if (count > best) best = count
-    }
-    return best
+    return Logic.serviceUnread(service, window.host ? window.host.windows : ({}))
   }
 
   function urgentFor(service) {
