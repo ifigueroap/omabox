@@ -175,6 +175,9 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(payload["dock"], "always")
         self.assertEqual(payload["edge"], "right")
         self.assertIs(payload["pinned"], False)
+        self.assertIs(payload["dnd"], False)
+        self.assertIs(next(row for row in payload["services"] if row["id"] == "whatsapp")["sound"], True)
+        self.assertIs(next(row for row in payload["services"] if row["id"] == "whatsapp")["badges"], True)
 
     def test_launch_spec(self) -> None:
         omabox.cmd_init()
@@ -284,6 +287,253 @@ class ConfigTests(unittest.TestCase):
         cleaned = menu.read_text(encoding="utf-8")
         self.assertNotIn("BEGIN omabox", cleaned)
         self.assertIn('"personal"', cleaned)
+
+
+class QuietTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.home = Path(self.tmp.name)
+        self._old_home = os.environ.get("HOME")
+        self._old_env = {
+            key: os.environ.get(key)
+            for key in ("OMABOX_PW_DUMP_JSON", "OMABOX_PACTL_JSON", "OMABOX_AUDIO_LOG", "OMABOX_PROC_ROOT")
+        }
+        os.environ["HOME"] = str(self.home)
+        os.environ["OMABOX_PW_DUMP_JSON"] = "[]"
+        os.environ.pop("OMABOX_PACTL_JSON", None)
+        os.environ.pop("OMABOX_AUDIO_LOG", None)
+        os.environ.pop("OMABOX_PROC_ROOT", None)
+
+    def tearDown(self) -> None:
+        if self._old_home is None:
+            os.environ.pop("HOME", None)
+        else:
+            os.environ["HOME"] = self._old_home
+        for key, value in self._old_env.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+        self.tmp.cleanup()
+
+    def test_defaults_and_dnd_do_not_rewrite_services(self) -> None:
+        omabox.cmd_init()
+        services_before = omabox.config_file().read_text(encoding="utf-8")
+        self.assertNotIn("sound =", services_before)
+        whatsapp = omabox.find_service(omabox.load_services(), "whatsapp")
+        assert whatsapp is not None
+        self.assertTrue(whatsapp["sound"])
+        self.assertTrue(whatsapp["badges"])
+        self.assertIs(omabox.normalized_settings()["dnd"], False)
+        omabox.cmd_config("dnd", "true")
+        self.assertEqual(omabox.config_file().read_text(encoding="utf-8"), services_before)
+        self.assertIn("dnd = true", omabox.settings_file().read_text(encoding="utf-8"))
+        self.assertIs(omabox.normalized_settings()["dnd"], True)
+        listed = json.loads(subprocess.check_output(
+            [sys.executable, str(ROOT / "lib" / "omabox.py"), "list", "--json"],
+            text=True,
+        ))
+        self.assertIs(listed["dnd"], True)
+        row = next(item for item in listed["services"] if item["id"] == "slack")
+        self.assertIs(row["sound"], True)
+        self.assertIs(row["soundEffective"], False)
+        self.assertIs(row["badgesEffective"], False)
+        omabox.cmd_config("do_not_disturb", "false")
+        self.assertIs(omabox.normalized_settings()["dnd"], False)
+        with self.assertRaises(SystemExit):
+            omabox.cmd_config("dnd", "maybe")
+
+    def test_service_flags_survive_update_and_keep_other_services(self) -> None:
+        omabox.cmd_init()
+        original = omabox.config_file().read_text(encoding="utf-8")
+        original = original.replace('id = "whatsapp"\n', 'id = "whatsapp"\ncustom = "kept"\n', 1)
+        omabox.config_file().write_text(original, encoding="utf-8")
+        ids_before = [service["id"] for service in omabox.load_services()]
+        omabox.main(["service", "whatsapp", "sound", "false"])
+        text = omabox.config_file().read_text(encoding="utf-8")
+        self.assertIn("Zulip has no public URL", text)
+        self.assertIn('custom = "kept"', text)
+        self.assertIn("sound = false", text)
+        services = omabox.load_services()
+        self.assertEqual([service["id"] for service in services], ids_before)
+        whatsapp = omabox.find_service(services, "whatsapp")
+        slack = omabox.find_service(services, "slack")
+        assert whatsapp is not None and slack is not None
+        self.assertFalse(whatsapp["sound"])
+        self.assertTrue(whatsapp["badges"])
+        self.assertEqual(whatsapp["_extra"].get("custom"), "kept")
+        self.assertTrue(slack["sound"])
+        self.assertTrue(slack["badges"])
+        omabox.main(["add", "whatsapp", "--url", "https://web.whatsapp.com/", "--update"])
+        whatsapp = omabox.find_service(omabox.load_services(), "whatsapp")
+        assert whatsapp is not None
+        self.assertFalse(whatsapp["sound"])
+        self.assertEqual(whatsapp["url"], "https://web.whatsapp.com/")
+        self.assertEqual(whatsapp["_extra"].get("custom"), "kept")
+        omabox.main(["service", "2", "badges", "false"])
+        slack = omabox.find_service(omabox.load_services(), "slack")
+        assert slack is not None
+        self.assertFalse(slack["badges"])
+        self.assertTrue(slack["sound"])
+        shown = subprocess.check_output(
+            [sys.executable, str(ROOT / "lib" / "omabox.py"), "service", "whatsapp", "sound"],
+            text=True,
+        )
+        self.assertEqual(shown.strip(), "false")
+        with self.assertRaises(SystemExit):
+            omabox.main(["service", "whatsapp", "theme", "false"])
+        with self.assertRaises(SystemExit):
+            omabox.main(["service", "whatsapp", "sound", "maybe"])
+
+    def test_legacy_do_not_disturb_key_is_kept(self) -> None:
+        omabox.settings_file().parent.mkdir(parents=True, exist_ok=True)
+        omabox.settings_file().write_text('do_not_disturb = true\nnote = "keep"\n', encoding="utf-8")
+        self.assertIs(omabox.normalized_settings()["dnd"], True)
+        omabox.cmd_config("edge", "left")
+        text = omabox.settings_file().read_text(encoding="utf-8")
+        self.assertIn("dnd = true", text)
+        self.assertIn("do_not_disturb = true", text)
+        self.assertIn('note = "keep"', text)
+        self.assertIn('edge = "left"', text)
+
+    def test_audio_plan_and_notification_pref(self) -> None:
+        services = [
+            {"id": "whatsapp", "name": "WhatsApp", "profile": "WhatsApp", "sound": False, "badges": True},
+            {"id": "slack", "name": "Slack", "profile": "Slack", "sound": True, "badges": False},
+            {"id": "work-slack", "name": "Work Slack", "profile": "Work Slack", "sound": False, "badges": True},
+        ]
+        nodes = [
+            {"id": "10", "pid": "42", "media_name": "WhatsApp", "media_class": "Stream/Output/Audio", "backend": "pipewire"},
+            {"id": "11", "pid": "42", "media_name": "Slack call", "media_class": "Stream/Output/Audio", "backend": "pipewire"},
+            {"id": "12", "pid": "42", "media_name": "Other tab", "media_class": "Stream/Output/Audio", "backend": "pipewire"},
+            {"id": "13", "pid": "99", "media_name": "WhatsApp", "media_class": "Stream/Output/Audio", "backend": "pipewire"},
+            {"id": "14", "pid": "42", "media_name": "Mic", "media_class": "Stream/Input/Audio", "backend": "pipewire"},
+            {"id": "15", "pid": "42", "media_name": "Work Slack", "media_class": "Stream/Output/Audio", "backend": "pipewire"},
+        ]
+        muted = {item["id"]: item["mute"] for item in omabox.plan_audio_actions(services, False, nodes, ["42"])}
+        self.assertTrue(muted["10"])
+        self.assertFalse(muted["11"])
+        self.assertFalse(muted["12"])
+        self.assertNotIn("13", muted)
+        self.assertNotIn("14", muted)
+        self.assertTrue(muted["15"])
+        dnd = {item["id"]: item["mute"] for item in omabox.plan_audio_actions(services, True, nodes, ["42"])}
+        self.assertTrue(dnd["10"])
+        self.assertTrue(dnd["11"])
+        self.assertTrue(dnd["12"])
+        self.assertNotIn("13", dnd)
+
+        raw = json.dumps([
+            {
+                "id": 10,
+                "type": "PipeWire:Interface:Node",
+                "info": {"props": {
+                    "application.process.id": 42,
+                    "media.name": "WhatsApp",
+                    "media.class": "Stream/Output/Audio",
+                    "application.name": "Chromium",
+                }},
+            },
+            {"id": 3, "type": "PipeWire:Interface:Client"},
+        ])
+        parsed = omabox.parse_pw_dump(raw)
+        self.assertEqual(parsed[0]["pid"], "42")
+        self.assertEqual(parsed[0]["media_name"], "WhatsApp")
+        self.assertEqual(omabox.parse_pw_dump("not-json"), [])
+        pulse = omabox.parse_pactl_inputs(json.dumps([
+            {"index": 7, "properties": {"application.process.id": "42", "media.name": "Slack"}},
+        ]))
+        self.assertEqual(pulse[0]["backend"], "pulse")
+        self.assertEqual(pulse[0]["id"], "7")
+
+        omabox.cmd_init()
+        prefs = omabox.profile_preferences_path("WhatsApp")
+        assert prefs is not None
+        prefs.parent.mkdir(parents=True)
+        prefs.write_text(json.dumps({
+            "other": 1,
+            "profile": {"name": "WhatsApp", "default_content_setting_values": {"popups": 1}},
+        }), encoding="utf-8")
+        broken = omabox.profile_preferences_path("Slack")
+        assert broken is not None
+        broken.parent.mkdir(parents=True)
+        broken.write_text("{", encoding="utf-8")
+        results = {row["id"]: row for row in omabox.apply_notification_flags(omabox.load_services(), False)}
+        self.assertEqual(results["whatsapp"]["notifications"], "updated")
+        self.assertTrue(results["whatsapp"]["allow"])
+        self.assertEqual(results["zulip"]["notifications"], "missing")
+        saved = json.loads(prefs.read_text(encoding="utf-8"))
+        self.assertEqual(saved["other"], 1)
+        self.assertEqual(saved["profile"]["default_content_setting_values"]["popups"], 1)
+        self.assertEqual(saved["profile"]["default_content_setting_values"]["notifications"], 1)
+        self.assertEqual(broken.read_text(encoding="utf-8"), "{")
+        omabox.main(["service", "whatsapp", "badges", "false"])
+        saved = json.loads(prefs.read_text(encoding="utf-8"))
+        self.assertEqual(saved["profile"]["default_content_setting_values"]["notifications"], 2)
+        self.assertEqual(omabox.patch_notification_pref(prefs, False), "unchanged")
+        omabox.cmd_config("dnd", "true")
+        blocked = {row["id"]: row for row in omabox.apply_notification_flags(omabox.load_services(), True)}
+        self.assertFalse(blocked["slack"]["allow"])
+
+        proc = self.home / "proc" / "42"
+        proc.mkdir(parents=True)
+        user_data = str(self.home / ".local" / "share" / "omabox" / "chromium")
+        (proc / "cmdline").write_bytes(f"chromium\0--user-data-dir={user_data}\0".encode())
+        os.environ["OMABOX_PROC_ROOT"] = str(self.home / "proc")
+        os.environ["OMABOX_PW_DUMP_JSON"] = raw
+        log = self.home / "audio.log"
+        os.environ["OMABOX_AUDIO_LOG"] = str(log)
+        omabox.cmd_config("dnd", "false")
+        omabox.main(["service", "whatsapp", "sound", "false"])
+        logged = log.read_text(encoding="utf-8").strip().splitlines()
+        self.assertIn("pipewire 10 1", logged)
+        saved = json.loads(prefs.read_text(encoding="utf-8"))
+        saved["profile"]["default_content_setting_values"]["notifications"] = 1
+        prefs.write_text(json.dumps(saved), encoding="utf-8")
+        skipped = omabox.apply_notification_flags(omabox.load_services(), True)
+        self.assertEqual(skipped[0]["id"], "whatsapp")
+        self.assertEqual(skipped[0]["notifications"], "browser-running")
+        self.assertEqual(
+            json.loads(prefs.read_text(encoding="utf-8"))["profile"]["default_content_setting_values"]["notifications"],
+            1,
+        )
+
+    def test_launch_spec_mute_flag(self) -> None:
+        omabox.cmd_init()
+        omabox.main(["service", "whatsapp", "sound", "false"])
+        spec = json.loads(subprocess.check_output(
+            [sys.executable, str(ROOT / "lib" / "omabox.py"), "launch-spec", "whatsapp"],
+            text=True,
+        ))
+        self.assertIs(spec["muteAudio"], True)
+        self.assertNotIn("--mute-audio", spec["args"])
+        omabox.main(["service", "whatsapp", "sound", "true"])
+        spec = json.loads(subprocess.check_output(
+            [sys.executable, str(ROOT / "lib" / "omabox.py"), "launch-spec", "whatsapp"],
+            text=True,
+        ))
+        self.assertIs(spec["muteAudio"], False)
+
+    def test_dock_menu_is_wired(self) -> None:
+        dock = (ROOT / "DockWindow.qml").read_text(encoding="utf-8")
+        self.assertIn("Qt.RightButton", dock)
+        self.assertIn("onPressAndHold", dock)
+        self.assertIn("suppressHold", dock)
+        self.assertIn("serviceMenuItems", dock)
+        self.assertIn("openMenu", dock)
+        self.assertIn('["service", window.menuServiceId, modelData.field, modelData.next]', dock)
+        self.assertIn('["config", "dnd", window.host.doNotDisturb ? "false" : "true"]', dock)
+        self.assertIn("Do not disturb", dock)
+        self.assertIn("allowsBadges", dock)
+        self.assertIn("allowsSound", dock)
+        panel = (ROOT / "Panel.qml").read_text(encoding="utf-8")
+        self.assertIn("doNotDisturb", panel)
+        self.assertIn('root.lastArgs[0] === "service"', panel)
+        dashboard = (ROOT / "DashboardWindow.qml").read_text(encoding="utf-8")
+        self.assertIn("Do not disturb", dashboard)
+        self.assertIn('["config", "dnd", modelData.value]', dashboard)
+        self.assertIn('["service", modelData.id, "sound"', dashboard)
+        self.assertIn('["service", modelData.id, "badges"', dashboard)
 
 
 class CliTests(unittest.TestCase):
@@ -509,6 +759,31 @@ class CliTests(unittest.TestCase):
         (proc / "9").mkdir()
         (proc / "9" / "cmdline").write_bytes(b"chromium\0--user-data-dir=/tmp/other\0")
         self.assertEqual(omabox.chromium_pids(data, proc), ["42"])
+
+    def test_service_dnd_commands(self) -> None:
+        services_before = (self.home / ".config" / "omabox" / "services.toml").read_text(encoding="utf-8")
+        self.assertEqual(self.run_cli("service", "whatsapp", "sound", "false").strip(), "false")
+        listed = json.loads(self.run_cli("list", "--json"))
+        whatsapp = next(row for row in listed["services"] if row["id"] == "whatsapp")
+        slack = next(row for row in listed["services"] if row["id"] == "slack")
+        self.assertIs(whatsapp["sound"], False)
+        self.assertIs(whatsapp["badges"], True)
+        self.assertIs(whatsapp["soundEffective"], False)
+        self.assertIs(slack["sound"], True)
+        self.assertIs(listed["dnd"], False)
+        self.assertIn("whatsapp", services_before)
+        rewritten = (self.home / ".config" / "omabox" / "services.toml").read_text(encoding="utf-8")
+        self.assertIn('id = "slack"', rewritten)
+        self.assertIn('id = "zulip"', rewritten)
+        self.assertIn("Zulip has no public URL", rewritten)
+        self.assertEqual(self.run_cli("config", "dnd", "true").strip(), "true")
+        self.assertIn("dnd=true", self.run_cli("config"))
+        listed = json.loads(self.run_cli("list", "--json"))
+        self.assertIs(listed["dnd"], True)
+        slack = next(row for row in listed["services"] if row["id"] == "slack")
+        self.assertIs(slack["sound"], True)
+        self.assertIs(slack["soundEffective"], False)
+        self.assertIs(slack["badgesEffective"], False)
 
     def test_list_and_class(self) -> None:
         listed = self.run_cli("list")

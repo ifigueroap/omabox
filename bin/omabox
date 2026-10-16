@@ -192,7 +192,14 @@ show_only() {
   show_special
   focus_expr=$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["focus"])' "$plan")
   run_dispatch "$focus_expr"
+  apply_quiet
   return 0
+}
+
+# Per-service mute and Do not disturb. Flags live in config; this is the
+# best-effort PipeWire / Chromium pass and must not fail a launch.
+apply_quiet() {
+  python apply-quiet >/dev/null 2>&1 || true
 }
 
 open_service() {
@@ -214,13 +221,18 @@ open_service() {
   fi
   browser=$(resolve_browser 1)
   echo "omabox: launching ${ident}" >&2
+  # Patch notification prefs before Chromium starts. A second pass after the
+  # window maps mutes audio; it leaves Preferences alone once the browser is up.
+  apply_quiet
   run_launch "$browser" "${args[@]}"
   if ! have hyprctl; then
+    apply_quiet
     return 0
   fi
   if wait_and_show "$class_name"; then
     return 0
   fi
+  apply_quiet
   echo "omabox: no window appeared for class ${class_name}" >&2
   echo "omabox: try: omabox launch ${ident} --print" >&2
   return 1
@@ -290,10 +302,13 @@ Usage: omabox <command> [args]
   dashboard                    Open the dock's service dashboard
   setup [--menu]               Install keybinds, window rules, and ~/.local/bin/omabox
   uninstall [--purge]          Remove those integrations
-  config                       Show dock, edge, and pinned
+  config                       Show dock, edge, pinned, and dnd
   config dock always|special-only
   config edge left|right|top|bottom
-  config pinned true|false    Show or set one dock setting
+  config pinned true|false
+  config dnd true|false        Do not disturb (also do_not_disturb)
+  service <id> sound|badges [true|false]
+                               Show or set one service mute flag
   fetch-icons                  Cache favicons for services without a bundled icon
   class <url> <profile>        Print the Chromium window class
 
@@ -320,7 +335,7 @@ main() {
   fi
   shift
   case $cmd in
-    init | list | add | remove | setup | uninstall | fetch-icons | class | get | rules | config)
+    init | list | add | remove | setup | uninstall | fetch-icons | class | get | rules | config | service | apply-quiet)
       python "$cmd" "$@"
       if [[ $cmd == setup ]] && have hyprctl; then
         hyprctl reload >/dev/null 2>&1 || true

@@ -51,6 +51,10 @@ PanelWindow {
     { "value": "false", "label": "Notch" },
     { "value": "true", "label": "Pinned" }
   ]
+  readonly property var dndChoices: [
+    { "value": "false", "label": "Off" },
+    { "value": "true", "label": "On" }
+  ]
 
   function fillPreset(service) {
     formId = service.id
@@ -117,7 +121,7 @@ PanelWindow {
         Layout.fillWidth: true
         wrapMode: Text.WordWrap
         textFormat: Text.PlainText
-        text: "Services share one Chromium (--user-data-dir) and keep a profile each. Super+Shift+O toggles the workspace. The bar icon does the same. Pin keeps the pill open. The edge chips move the dock."
+        text: "Services share one Chromium (--user-data-dir) and keep a profile each. Super+Shift+O toggles the workspace. The bar icon does the same. Pin keeps the pill open. The edge chips move the dock. Right-click a dock icon for sound and badges. Do not disturb pauses both."
         color: Commons.Color.muted
         font.family: Style.font.family
         font.pixelSize: Style.font.bodySmall
@@ -253,6 +257,61 @@ PanelWindow {
         }
       }
 
+      RowLayout {
+        Layout.fillWidth: true
+        spacing: Style.spacing.xs
+        Text {
+          textFormat: Text.PlainText
+          text: "Do not disturb"
+          color: Commons.Color.popups.text
+          font.family: Style.font.family
+          font.pixelSize: Style.font.body
+        }
+        Repeater {
+          model: dashboard.dndChoices
+          delegate: Rectangle {
+            required property var modelData
+            readonly property string dndValue: dashboard.host && dashboard.host.doNotDisturb ? "true" : "false"
+            readonly property bool selected: dndValue === modelData.value
+            Layout.preferredHeight: Style.spacing.controlHeight
+            Layout.preferredWidth: dndLabel.implicitWidth + Style.spacing.controlPaddingX * 2
+            radius: Style.space(6)
+            color: selected ? Commons.Color.menu.selectedBackground : "transparent"
+            border.color: Commons.Color.popups.border
+            border.width: Style.normalBorderWidth
+
+            Text {
+              id: dndLabel
+              anchors.centerIn: parent
+              textFormat: Text.PlainText
+              text: modelData.label
+              color: Commons.Color.popups.text
+              font.family: Style.font.family
+              font.pixelSize: Style.font.bodySmall
+            }
+
+            MouseArea {
+              anchors.fill: parent
+              onClicked: {
+                if (!dashboard.host) return
+                dashboard.host.run(["config", "dnd", modelData.value])
+              }
+            }
+          }
+        }
+      }
+
+      Text {
+        Layout.fillWidth: true
+        visible: dashboard.host && dashboard.host.doNotDisturb
+        wrapMode: Text.WordWrap
+        textFormat: Text.PlainText
+        text: "Sounds and badges stay off until Do not disturb is off."
+        color: Commons.Color.muted
+        font.family: Style.font.family
+        font.pixelSize: Style.font.caption
+      }
+
       Flickable {
         Layout.fillWidth: true
         Layout.fillHeight: true
@@ -311,6 +370,40 @@ PanelWindow {
                   }
                 }
                 Text {
+                  text: modelData.sound === false ? "muted" : "sound"
+                  color: (modelData.sound === false || (dashboard.host && dashboard.host.doNotDisturb))
+                        ? Commons.Color.muted
+                        : Commons.Color.popups.text
+                  font.family: Style.font.family
+                  font.pixelSize: Style.font.caption
+                  MouseArea {
+                    anchors.fill: parent
+                    anchors.margins: -Style.spacing.xs
+                    onClicked: {
+                      if (!dashboard.host) return
+                      var enabled = modelData.sound !== false
+                      dashboard.host.run(["service", modelData.id, "sound", enabled ? "false" : "true"])
+                    }
+                  }
+                }
+                Text {
+                  text: modelData.badges === false ? "no badges" : "badges"
+                  color: (modelData.badges === false || (dashboard.host && dashboard.host.doNotDisturb))
+                        ? Commons.Color.muted
+                        : Commons.Color.popups.text
+                  font.family: Style.font.family
+                  font.pixelSize: Style.font.caption
+                  MouseArea {
+                    anchors.fill: parent
+                    anchors.margins: -Style.spacing.xs
+                    onClicked: {
+                      if (!dashboard.host) return
+                      var enabled = modelData.badges !== false
+                      dashboard.host.run(["service", modelData.id, "badges", enabled ? "false" : "true"])
+                    }
+                  }
+                }
+                Text {
                   text: "remove"
                   color: Commons.Color.urgent
                   font.family: Style.font.family
@@ -330,7 +423,7 @@ PanelWindow {
               MouseArea {
                 id: rowMouse
                 anchors.fill: parent
-                anchors.rightMargin: Style.space(64)
+                anchors.rightMargin: Style.space(196)
                 hoverEnabled: true
                 onClicked: dashboard.fillPreset(modelData)
               }

@@ -13,6 +13,7 @@ import json
 import os
 import re
 import shutil
+import subprocess
 import sys
 import tomllib
 import urllib.request
@@ -22,6 +23,7 @@ ROOT = Path(__file__).resolve().parent.parent
 PRESETS_FILE = ROOT / "presets" / "services.toml"
 DEFAULT_UNREAD = r"^\((\d+)\)"
 SERVICE_FIELDS = ("id", "name", "url", "icon", "profile", "key", "unread")
+FLAG_FIELDS = ("sound", "badges")
 ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 KEY_RE = re.compile(r"^[1-9]$")
 BEGIN = "-- BEGIN omabox"
@@ -55,7 +57,8 @@ def config_file() -> Path:
 
 DOCK_MODES = ("always", "special-only")
 DOCK_EDGES = ("left", "right", "top", "bottom")
-_SETTING_ORDER = ("dock", "edge", "pinned")
+_SETTING_ORDER = ("dock", "edge", "pinned", "dnd")
+_DND_KEYS = ("dnd", "do_not_disturb")
 
 
 def settings_file() -> Path:
@@ -73,6 +76,15 @@ def _read_settings_raw() -> dict:
     return data if isinstance(data, dict) else {}
 
 
+def _read_dnd(source: dict) -> bool:
+    """Global Do not disturb. `dnd` wins when both names are set."""
+    if isinstance(source.get("dnd"), bool):
+        return bool(source["dnd"])
+    if isinstance(source.get("do_not_disturb"), bool):
+        return bool(source["do_not_disturb"])
+    return False
+
+
 def normalized_settings(raw: dict | None = None) -> dict[str, object]:
     source = _read_settings_raw() if raw is None else raw
     dock = source.get("dock")
@@ -82,6 +94,7 @@ def normalized_settings(raw: dict | None = None) -> dict[str, object]:
         "dock": dock if isinstance(dock, str) and dock in DOCK_MODES else "always",
         "edge": edge if isinstance(edge, str) and edge in DOCK_EDGES else "right",
         "pinned": pinned if isinstance(pinned, bool) else False,
+        "dnd": _read_dnd(source),
     }
 
 
@@ -111,6 +124,9 @@ def save_settings(updates: dict) -> None:
     raw["dock"] = current["dock"]
     raw["edge"] = current["edge"]
     raw["pinned"] = current["pinned"]
+    raw["dnd"] = bool(current["dnd"])
+    if "do_not_disturb" in raw:
+        raw["do_not_disturb"] = raw["dnd"]
     lines: list[str] = []
     written: set[str] = set()
     for key in _SETTING_ORDER:
@@ -135,9 +151,11 @@ def cmd_config(key: str = "", value: str = "") -> None:
     settings = normalized_settings()
     if not key:
         pinned = "true" if settings["pinned"] else "false"
+        dnd = "true" if settings["dnd"] else "false"
         print(f"dock={settings['dock']}")
         print(f"edge={settings['edge']}")
         print(f"pinned={pinned}")
+        print(f"dnd={dnd}")
         return
     if key == "dock":
         if not value:
@@ -164,6 +182,16 @@ def cmd_config(key: str = "", value: str = "") -> None:
         if value not in ("true", "false"):
             die("pinned must be 'true' or 'false'")
         save_settings({"pinned": value == "true"})
+        print(value)
+        return
+    if key in _DND_KEYS:
+        if not value:
+            print("true" if settings["dnd"] else "false")
+            return
+        if value not in ("true", "false"):
+            die("dnd must be 'true' or 'false'")
+        save_settings({"dnd": value == "true"})
+        apply_quiet()
         print(value)
         return
     die(f"unknown setting '{key}'")
@@ -441,10 +469,48 @@ def toml_string(value: str) -> str:
     return json.dumps(value, ensure_ascii=False)
 
 
+def service_flag(data: dict, field: str, default: bool = True) -> bool:
+    """Missing sound/badges stay enabled so an old services.toml is unchanged in meaning."""
+    if field not in data:
+        return default
+    value = data[field]
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in ("true", "1", "on", "yes"):
+            return True
+        if lowered in ("false", "0", "off", "no"):
+            return False
+    return default
+
+
+def extra_fields(data: dict) -> dict:
+    extra: dict = {}
+    for key, value in data.items():
+        if not isinstance(key, str) or key in SERVICE_FIELDS or key in FLAG_FIELDS:
+            continue
+        if not _toml_key(key) or _toml_scalar(value) is None:
+            continue
+        extra[key] = value
+    return extra
+
+
 def render_service(service: dict) -> str:
     lines = ["[[service]]"]
     for field in SERVICE_FIELDS:
         lines.append(f"{field} = {toml_string(str(service.get(field, '')))}")
+    lines.append(f"sound = {'true' if service.get('sound', True) else 'false'}")
+    lines.append(f"badges = {'true' if service.get('badges', True) else 'false'}")
+    extra = service.get("_extra") or {}
+    if isinstance(extra, dict):
+        for key, value in extra.items():
+            if not isinstance(key, str) or key in SERVICE_FIELDS or key in FLAG_FIELDS or not _toml_key(key):
+                continue
+            rendered = _toml_scalar(value)
+            if rendered is None:
+                continue
+            lines.append(f"{key} = {rendered}")
     lines.append("")
     return "\n".join(lines)
 
@@ -487,6 +553,9 @@ def normalize_service(data: dict) -> dict:
     service["key"] = check_key(service["key"].strip())
     service["unread"] = check_unread(service["unread"] if service["unread"] != "" else DEFAULT_UNREAD)
     service["icon"] = service["icon"].strip()
+    service["sound"] = service_flag(data, "sound")
+    service["badges"] = service_flag(data, "badges")
+    service["_extra"] = extra_fields(data)
     return service
 
 
@@ -556,7 +625,11 @@ def resolve_icon(service: dict) -> str:
     return str(cached) if cached else ""
 
 
-def public_service(service: dict) -> dict:
+def public_service(service: dict, dnd: bool | None = None) -> dict:
+    if dnd is None:
+        dnd = bool(normalized_settings()["dnd"])
+    sound = bool(service.get("sound", True))
+    badges = bool(service.get("badges", True))
     cls = window_class(service["url"], service["profile"]) if service["url"] else ""
     return {
         "id": service["id"],
@@ -569,6 +642,10 @@ def public_service(service: dict) -> dict:
         "class": cls,
         "classRegex": class_regex(cls),
         "ready": bool(service["url"]),
+        "sound": sound,
+        "badges": badges,
+        "soundEffective": sound and not dnd,
+        "badgesEffective": badges and not dnd,
     }
 
 
@@ -590,15 +667,17 @@ def cmd_init(force: bool = False, announce: bool = True) -> None:
 
 
 def cmd_list(as_json: bool) -> None:
-    services = [public_service(service) for service in load_services()]
+    settings = normalized_settings()
+    dnd = bool(settings["dnd"])
+    services = [public_service(service, dnd=dnd) for service in load_services()]
     if as_json:
-        settings = normalized_settings()
         json.dump(
             {
                 "services": services,
                 "dock": settings["dock"],
                 "edge": settings["edge"],
                 "pinned": settings["pinned"],
+                "dnd": dnd,
             },
             sys.stdout,
         )
@@ -696,6 +775,12 @@ def cmd_add(args: argparse.Namespace) -> None:
         incoming = normalize_service(base)
     incoming = normalize_service(incoming)
     existing = find_service(services, incoming["id"])
+    if existing:
+        # `omabox add --update` rewrites the block. Keep mute flags and any
+        # extra flat keys so a URL change does not turn sound back on.
+        incoming["sound"] = existing["sound"]
+        incoming["badges"] = existing["badges"]
+        incoming["_extra"] = dict(existing.get("_extra") or {})
     if existing and not args.update:
         if not overridden:
             json.dump(public_service(existing), sys.stdout)
@@ -975,9 +1060,310 @@ def cmd_launch_spec(ident: str) -> None:
         "--no-first-run",
         "--no-default-browser-check",
     ]
+    # Profiles share one Chromium process, so --mute-audio would silence every
+    # service. muteAudio tells the launcher to apply the per-stream policy
+    # after the window exists.
     public["userDataDir"] = user_data
     public["args"] = args
+    public["muteAudio"] = not bool(public["soundEffective"])
     json.dump(public, sys.stdout)
+    sys.stdout.write("\n")
+
+
+def cmd_service(ident: str, field: str, value: str) -> None:
+    if field not in FLAG_FIELDS:
+        die("service field must be 'sound' or 'badges'")
+    services = load_services()
+    if re.fullmatch(r"[1-9]", ident):
+        found = find_by_key(services, ident) or find_service(services, ident)
+    else:
+        found = find_service(services, ident)
+    if not found:
+        die(f"no service '{ident}'")
+    if not value:
+        print("true" if found[field] else "false")
+        return
+    if value not in ("true", "false"):
+        die(f"{field} must be 'true' or 'false'")
+    found[field] = value == "true"
+    write_services(services)
+    apply_quiet()
+    print(value)
+
+
+def best_service_match(node: dict, services: list[dict]) -> dict | None:
+    """Longest service name, profile, or id contained in the stream's media name."""
+    media = str(node.get("media_name") or "").casefold()
+    if not media:
+        return None
+    best: dict | None = None
+    best_len = 0
+    for service in services:
+        for key in ("name", "profile", "id"):
+            text = str(service.get(key) or "").strip()
+            if len(text) < 3:
+                continue
+            needle = text.casefold()
+            if needle in media and len(needle) > best_len:
+                best = service
+                best_len = len(needle)
+    return best
+
+
+def _output_stream(node: dict) -> bool:
+    media_class = str(node.get("media_class") or "")
+    if not media_class:
+        return True
+    return media_class.startswith("Stream/Output")
+
+
+def plan_audio_actions(services: list[dict], dnd: bool, nodes: list, pids: list[str]) -> list[dict]:
+    """Mute plan for Omabox Chromium streams.
+
+    Only nodes whose process id is an Omabox browser pid are touched, so a
+    normal Chromium window is left alone. Do not disturb mutes every such
+    stream. Otherwise a stream follows the service whose name it matches,
+    and an unmatched stream is unmuted so leaving Do not disturb is audible.
+    """
+    owned = {str(pid) for pid in pids if str(pid)}
+    actions: list[dict] = []
+    for node in nodes:
+        if not isinstance(node, dict):
+            continue
+        pid = str(node.get("pid") or "")
+        if pid not in owned or not _output_stream(node):
+            continue
+        node_id = str(node.get("id") or "")
+        if not node_id:
+            continue
+        if dnd:
+            mute = True
+        else:
+            matched = best_service_match(node, services)
+            mute = False if matched is None else not bool(matched.get("sound", True))
+        actions.append({
+            "id": node_id,
+            "pid": pid,
+            "mute": mute,
+            "backend": str(node.get("backend") or "pipewire"),
+        })
+    return actions
+
+
+def parse_pw_dump(raw: str) -> list[dict]:
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(payload, list):
+        return []
+    nodes: list[dict] = []
+    for item in payload:
+        if not isinstance(item, dict) or item.get("type") != "PipeWire:Interface:Node":
+            continue
+        info = item.get("info") if isinstance(item.get("info"), dict) else {}
+        props = info.get("props") if isinstance(info.get("props"), dict) else {}
+        if not props and isinstance(item.get("props"), dict):
+            props = item["props"]
+        if not isinstance(props, dict):
+            continue
+        node_id = item.get("id")
+        if node_id is None:
+            continue
+        pid = props.get("application.process.id")
+        nodes.append({
+            "id": str(node_id),
+            "pid": "" if pid is None else str(pid),
+            "media_name": str(props.get("media.name") or ""),
+            "app_name": str(props.get("application.name") or ""),
+            "media_class": str(props.get("media.class") or ""),
+            "backend": "pipewire",
+        })
+    return nodes
+
+
+def parse_pactl_inputs(raw: str) -> list[dict]:
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        return []
+    if isinstance(payload, dict):
+        payload = payload.get("sink_inputs") or payload.get("sink-inputs") or []
+    if not isinstance(payload, list):
+        return []
+    nodes: list[dict] = []
+    for item in payload:
+        if not isinstance(item, dict):
+            continue
+        props = item.get("properties") if isinstance(item.get("properties"), dict) else {}
+        node_id = item.get("index")
+        if node_id is None:
+            node_id = item.get("id")
+        if node_id is None:
+            continue
+        pid = props.get("application.process.id")
+        nodes.append({
+            "id": str(node_id),
+            "pid": "" if pid is None else str(pid),
+            "media_name": str(props.get("media.name") or ""),
+            "app_name": str(props.get("application.name") or ""),
+            "media_class": "",
+            "backend": "pulse",
+        })
+    return nodes
+
+
+def _command_stdout(argv: list[str]) -> str:
+    try:
+        completed = subprocess.run(
+            argv,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=3,
+        )
+    except (subprocess.SubprocessError, OSError):
+        return ""
+    if completed.returncode != 0:
+        return ""
+    return completed.stdout or ""
+
+
+def pipewire_nodes() -> list[dict]:
+    if "OMABOX_PW_DUMP_JSON" in os.environ:
+        return parse_pw_dump(os.environ["OMABOX_PW_DUMP_JSON"])
+    if "OMABOX_PACTL_JSON" in os.environ:
+        return parse_pactl_inputs(os.environ["OMABOX_PACTL_JSON"])
+    pw = shutil.which("pw-dump")
+    if pw:
+        raw = _command_stdout([pw])
+        nodes = parse_pw_dump(raw) if raw else []
+        if nodes:
+            return nodes
+    pactl = shutil.which("pactl")
+    if pactl:
+        raw = _command_stdout([pactl, "-f", "json", "list", "sink-inputs"])
+        if raw:
+            return parse_pactl_inputs(raw)
+    return []
+
+
+def perform_mute(action: dict) -> bool:
+    log_path = os.environ.get("OMABOX_AUDIO_LOG")
+    mute = "1" if action.get("mute") else "0"
+    if log_path:
+        try:
+            with open(log_path, "a", encoding="utf-8") as handle:
+                handle.write(f"{action.get('backend', 'pipewire')} {action.get('id')} {mute}\n")
+        except OSError:
+            return False
+        return True
+    backend = action.get("backend")
+    if backend == "pulse":
+        argv = ["pactl", "set-sink-input-mute", str(action.get("id")), mute]
+    else:
+        argv = ["wpctl", "set-mute", str(action.get("id")), mute]
+    if shutil.which(argv[0]) is None:
+        return False
+    try:
+        completed = subprocess.run(
+            argv,
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=3,
+        )
+    except (subprocess.SubprocessError, OSError):
+        return False
+    return completed.returncode == 0
+
+
+def profile_preferences_path(profile: str) -> Path | None:
+    text = str(profile or "")
+    if not text or text in (".", "..") or "/" in text or "\\" in text or "\x00" in text:
+        return None
+    return chromium_dir() / text / "Preferences"
+
+
+def patch_notification_pref(path: Path | None, allow: bool) -> str:
+    """Best-effort Chromium content setting. 1 allows notifications, 2 blocks them.
+
+    A missing or unreadable Preferences file is left alone so the first launch
+    can create a complete profile. The Omabox flag stays the source of truth.
+    """
+    if path is None or not path.is_file():
+        return "missing"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, UnicodeError):
+        return "skipped"
+    if not isinstance(data, dict):
+        return "skipped"
+    profile = data.get("profile")
+    if profile is None:
+        profile = {}
+        data["profile"] = profile
+    if not isinstance(profile, dict):
+        return "skipped"
+    defaults = profile.get("default_content_setting_values")
+    if defaults is None:
+        defaults = {}
+        profile["default_content_setting_values"] = defaults
+    if not isinstance(defaults, dict):
+        return "skipped"
+    desired = 1 if allow else 2
+    if defaults.get("notifications") == desired:
+        return "unchanged"
+    defaults["notifications"] = desired
+    temporary = path.with_name(path.name + ".omabox-tmp")
+    try:
+        temporary.write_text(json.dumps(data, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+        temporary.replace(path)
+    except OSError:
+        try:
+            temporary.unlink()
+        except OSError:
+            pass
+        return "skipped"
+    return "updated"
+
+
+def apply_notification_flags(services: list[dict], dnd: bool) -> list[dict]:
+    # Chromium rewrites Preferences on exit. Skip the file while that process
+    # is running so a toggle cannot race it. The dock still hides badges.
+    browser_running = bool(chromium_pids(str(chromium_dir())))
+    results: list[dict] = []
+    for service in services:
+        allow = bool(service.get("badges", True)) and not dnd
+        if browser_running:
+            status = "browser-running"
+        else:
+            status = patch_notification_pref(profile_preferences_path(str(service.get("profile") or "")), allow)
+        results.append({"id": service.get("id", ""), "allow": allow, "notifications": status})
+    return results
+
+
+def apply_audio(services: list[dict], dnd: bool) -> list[dict]:
+    pids = chromium_pids(str(chromium_dir()))
+    actions = plan_audio_actions(services, dnd, pipewire_nodes(), pids)
+    applied: list[dict] = []
+    for action in actions:
+        applied.append({**action, "ok": perform_mute(action)})
+    return applied
+
+
+def apply_quiet() -> dict:
+    services = load_services()
+    dnd = bool(normalized_settings()["dnd"])
+    return {
+        "dnd": dnd,
+        "audio": apply_audio(services, dnd),
+        "notifications": apply_notification_flags(services, dnd),
+    }
+
+
+def cmd_apply_quiet() -> None:
+    json.dump(apply_quiet(), sys.stdout)
     sys.stdout.write("\n")
 
 
@@ -1044,6 +1430,13 @@ def build_parser() -> argparse.ArgumentParser:
     remove = sub.add_parser("remove")
     remove.add_argument("id")
 
+    service = sub.add_parser("service")
+    service.add_argument("id")
+    service.add_argument("field")
+    service.add_argument("value", nargs="?", default="")
+
+    sub.add_parser("apply-quiet")
+
     sub.add_parser("rules")
 
     setup = sub.add_parser("setup")
@@ -1081,6 +1474,10 @@ def main(argv: list[str] | None = None) -> None:
         cmd_add(args)
     elif args.command == "remove":
         cmd_remove(args.id)
+    elif args.command == "service":
+        cmd_service(args.id, args.field, args.value)
+    elif args.command == "apply-quiet":
+        cmd_apply_quiet()
     elif args.command == "rules":
         print(write_rules())
     elif args.command == "setup":
