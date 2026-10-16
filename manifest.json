@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "omabox",
   "name": "Omabox",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "author": "ifigueroap",
   "description": "Rambox-like multi-account web app dock. One Chromium, one profile per service, on Hyprland special workspace omabox.",
   "kinds": ["panel", "bar-widget"],

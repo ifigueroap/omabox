@@ -36,6 +36,8 @@ On a regular workspace the dock stays a short notch on that edge, drawn at 35% o
 
 A bar button on the right of the Omarchy bar runs `omabox toggle`, the same action as `Super+Shift+O`. It is a `bar-widget` (`BarWidget.qml`, `defaultSection: "right"`), not a tray-drawer entry, so it stays visible without opening the tray (`docs/omarchy-shell.md`). The widget is a plain `Item` with `triggerPress`: `qs.Ui.BarWidget` and `qs.Ui.WidgetButton` are types the shell does not expose to `~/.config/omarchy/plugins/`.
 
+The button shows the total unread count: the sum of the same per-service title counts the dock badges use (`windowtitlev2`, highest count per class). A service with badges off is left out of that sum, and Do not disturb makes the total 0. A service that only has an urgent dot, with no number in the title, stays a dot on the dock and does not add to this total. The badge is hidden when the total is 0. The click still runs `omabox toggle`.
+
 Enabling a plugin that declares `bar-widget` writes a `bar.layout` entry and does not also append `plugins[]` (`shell/services/PluginRegistry.qml` `setEnabled`). A checkout that was enabled earlier already has `omabox` in `plugins[]`. `omarchy bar put` leaves that entry where it is and does not add a second one, so the button never appears. Disable and enable again after the shell has loaded this manifest:
 
 ```bash
@@ -49,8 +51,8 @@ After a later `git pull` in the plugin checkout, restart the shell so it loads n
 
 ```bash
 git -C ~/.config/omarchy/plugins/omabox fetch origin
-git -C ~/.config/omarchy/plugins/omabox checkout cursor/omabox-dock-layout-34c0
-git -C ~/.config/omarchy/plugins/omabox pull origin cursor/omabox-dock-layout-34c0
+git -C ~/.config/omarchy/plugins/omabox checkout master
+git -C ~/.config/omarchy/plugins/omabox pull origin master
 ~/.config/omarchy/plugins/omabox/bin/omabox setup
 hyprctl configerrors
 omarchy restart shell
@@ -59,6 +61,8 @@ omarchy plugin enable omabox
 omarchy-shell omabox dashboard
 omabox config
 ```
+
+Those commands follow `master`. To stay on a release instead, check out the tag after `fetch` (`v1.1.0` is the current one).
 
 `omabox dashboard` prints `ok` and opens the service dashboard when the panel is mounted. `Target not found.` means `Panel.qml` did not load, so no `omabox` IPC target was registered. `omarchy-restart-shell` is the same restart. A CLI-only change (launch, focus, toggle) is picked up through the `~/.local/bin/omabox` symlink without a shell restart. `omabox config` prints `dock=always`, `edge=right`, `pinned=false`, and `dnd=false` until you change them.
 
@@ -206,7 +210,7 @@ That is `web_app::GenerateApplicationNameFromURL` (`host + "_" + path`) plus `Ge
 
 Window rules use `o.window` with `workspace = "special:omabox silent"`. That helper sets `match.class` and passes the table to `hl.window_rule` (`default/hypr/helpers.lua`). The Hyprland wiki's `workspace` effect accepts a trailing ` silent`, the same form as Omarchy's screensaver rule in `default/hypr/apps/system.lua`, so a new service does not steal the current workspace. `omabox focus` moves the window onto that workspace with `hl.dsp.window.move`, shows it with `hl.dsp.workspace.toggle_special("omabox")`, and focuses it with `hl.dsp.focus`.
 
-Unread badges read Hyprland `windowtitlev2` titles (`(3) …`). An `urgent` event with no parsed count draws a dot instead, cleared on `activewindowv2`.
+Unread badges read Hyprland `windowtitlev2` titles (`(3) …`). An `urgent` event with no parsed count draws a dot on that dock icon instead, cleared on `activewindowv2`. The bar button adds those title counts together and hides its badge at 0.
 
 ## Uninstall
 
@@ -255,7 +259,7 @@ Not run, because there is no Omarchy desktop here:
 
 - Quickshell loading the panel or the bar widget, live theme updates, layer-shell anchors on each edge, notch hover, idle opacity, or `ShellIpc`
 - A real Chromium `--app` window and its Hyprland `class`
-- `windowtitlev2` / `urgent` delivery into the badge
+- `windowtitlev2` / `urgent` delivery into the dock badge or the bar total (the sum itself is covered by `tests/model.test.js`)
 - `hyprctl dispatch` or `hyprctl reload` against a running compositor (tests check the Lua strings with a fake `hyprctl`)
 - `omarchy plugin add` / `omarchy bar put` against a running shell (placement follows `PluginRegistry.setEnabled` in the quattro tree)
 - The dashboard chips in a real shell (there is no browser UI to click; the chips call `omabox config` and `omabox service`)

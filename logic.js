@@ -117,6 +117,116 @@ function serviceMenuItems(service) {
   ]
 }
 
+// Same per-window count the dock badge uses: the highest parsed title count
+// for that service's class. Several windows of one class do not add together.
+function serviceUnread(service, windows) {
+  if (!service) return 0
+  var best = 0
+  var rows = windows || {}
+  for (var address in rows) {
+    var row = rows[address]
+    if (!row || row.className !== service.class) continue
+    var count = unreadCount(row.title, service.unread)
+    if (count > best) best = count
+  }
+  return best
+}
+
+// Sum of the dock's per-service title counts. Services with badges off, and
+// every service while Do not disturb is on, contribute nothing. Zero hides
+// the bar badge. An urgent dot with no parsed count is not added here.
+function totalUnread(services, windows, dnd) {
+  if (isDnd(dnd)) return 0
+  var rows = services || []
+  var total = 0
+  for (var i = 0; i < rows.length; i++) {
+    if (!allowsBadges(rows[i], dnd)) continue
+    total += serviceUnread(rows[i], windows)
+  }
+  return total
+}
+
+function unreadLabel(total) {
+  if (!total || total <= 0) return ""
+  return total > 99 ? "99+" : String(total)
+}
+
+function copyWindows(windows) {
+  var next = {}
+  var rows = windows || {}
+  for (var key in rows) next[key] = rows[key]
+  return next
+}
+
+function mergeWindow(windows, address, patch) {
+  var key = normAddress(address)
+  if (!key) return copyWindows(windows)
+  var next = copyWindows(windows)
+  var prev = next[key] || { className: "", title: "", urgent: false }
+  var incoming = patch || {}
+  next[key] = {
+    className: incoming.className !== undefined ? incoming.className : prev.className,
+    title: incoming.title !== undefined ? incoming.title : prev.title,
+    urgent: incoming.urgent !== undefined ? incoming.urgent : prev.urgent
+  }
+  return next
+}
+
+function forgetWindow(windows, address) {
+  var key = normAddress(address)
+  var next = {}
+  var rows = windows || {}
+  for (var existing in rows) {
+    if (existing !== key) next[existing] = rows[existing]
+  }
+  return next
+}
+
+// Hyprland toplevel snapshot. An empty list keeps the previous map, matching
+// the panel: a brief empty read must not clear badges.
+function syncToplevels(windows, values) {
+  var list = values || []
+  var prevWindows = windows || {}
+  var next = {}
+  for (var i = 0; i < list.length; i++) {
+    var top = list[i]
+    if (!top) continue
+    var ipc = top.lastIpcObject || {}
+    var wayland = top.wayland || null
+    var key = normAddress(ipc.address || top.address || "")
+    if (!key) continue
+    var prev = prevWindows[key] || null
+    var wm = String(ipc.class || ipc.initialClass || (wayland && wayland.appId) || "")
+    var title = String(ipc.title || ipc.initialTitle || "")
+    next[key] = {
+      className: wm || (prev ? prev.className : ""),
+      title: title || (prev ? prev.title : ""),
+      urgent: prev ? prev.urgent === true : false
+    }
+  }
+  if (list.length === 0) {
+    for (var kept in prevWindows) next[kept] = prevWindows[kept]
+  }
+  return next
+}
+
+// Title, urgent, focus, and close. openwindow / windowtitle still refresh
+// from the toplevel list in QML, because that list is live Hyprland state.
+function handleWindowEvent(windows, event) {
+  var current = windows || {}
+  if (!event || !event.name) return current
+  var name = String(event.name)
+  var data = event.data !== undefined && event.data !== null ? String(event.data) : ""
+  if (name === "windowtitlev2") {
+    var parsed = eventTitle(data)
+    return mergeWindow(current, parsed.address, { title: parsed.title })
+  }
+  if (name === "urgent") return mergeWindow(current, data, { urgent: true })
+  if (name === "activewindowv2") return mergeWindow(current, data, { urgent: false })
+  if (name === "closewindow") return forgetWindow(current, data)
+  return current
+}
+
 if (typeof module === "object" && module.exports) {
   module.exports = {
     parseHttpUrl: parseHttpUrl,
@@ -130,6 +240,13 @@ if (typeof module === "object" && module.exports) {
     isDnd: isDnd,
     allowsSound: allowsSound,
     allowsBadges: allowsBadges,
-    serviceMenuItems: serviceMenuItems
+    serviceMenuItems: serviceMenuItems,
+    serviceUnread: serviceUnread,
+    totalUnread: totalUnread,
+    unreadLabel: unreadLabel,
+    mergeWindow: mergeWindow,
+    forgetWindow: forgetWindow,
+    syncToplevels: syncToplevels,
+    handleWindowEvent: handleWindowEvent
   }
 }
